@@ -24,18 +24,25 @@ Implements the Categorical DQN agent from
 
 from __future__ import absolute_import
 from __future__ import division
+# Using Type Annotations.
 from __future__ import print_function
 
+from typing import Optional, Text
+
 import gin
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 
 from tf_agents.agents import tf_agent
 from tf_agents.agents.dqn import dqn_agent
+from tf_agents.networks import network
 from tf_agents.networks import utils
 from tf_agents.policies import boltzmann_policy
 from tf_agents.policies import categorical_q_policy
 from tf_agents.policies import epsilon_greedy_policy
 from tf_agents.policies import greedy_policy
+from tf_agents.trajectories import time_step as ts
+from tf_agents.trajectories import trajectory
+from tf_agents.typing import types
 from tf_agents.utils import common
 from tf_agents.utils import nest_utils
 from tf_agents.utils import value_ops
@@ -45,31 +52,33 @@ from tf_agents.utils import value_ops
 class CategoricalDqnAgent(dqn_agent.DqnAgent):
   """A Categorical DQN Agent based on the DQN Agent."""
 
-  def __init__(self,
-               time_step_spec,
-               action_spec,
-               categorical_q_network,
-               optimizer,
-               observation_and_action_constraint_splitter=None,
-               min_q_value=-10.0,
-               max_q_value=10.0,
-               epsilon_greedy=0.1,
-               n_step_update=1,
-               boltzmann_temperature=None,
-               # Params for target network updates
-               target_categorical_q_network=None,
-               target_update_tau=1.0,
-               target_update_period=1,
-               # Params for training.
-               td_errors_loss_fn=None,
-               gamma=1.0,
-               reward_scale_factor=1.0,
-               gradient_clipping=None,
-               # Params for debugging
-               debug_summaries=False,
-               summarize_grads_and_vars=False,
-               train_step_counter=None,
-               name=None):
+  def __init__(
+      self,
+      time_step_spec: ts.TimeStep,
+      action_spec: types.NestedTensorSpec,
+      categorical_q_network: network.Network,
+      optimizer: types.Optimizer,
+      observation_and_action_constraint_splitter: Optional[
+          types.Splitter] = None,
+      min_q_value: types.Float = -10.0,
+      max_q_value: types.Float = 10.0,
+      epsilon_greedy: types.Float = 0.1,
+      n_step_update: int = 1,
+      boltzmann_temperature: Optional[types.Float] = None,
+      # Params for target network updates
+      target_categorical_q_network: Optional[network.Network] = None,
+      target_update_tau: types.Float = 1.0,
+      target_update_period: types.Int = 1,
+      # Params for training.
+      td_errors_loss_fn: Optional[types.LossFn] = None,
+      gamma: types.Float = 1.0,
+      reward_scale_factor: types.Float = 1.0,
+      gradient_clipping: Optional[types.Float] = None,
+      # Params for debugging
+      debug_summaries: bool = False,
+      summarize_grads_and_vars: bool = False,
+      train_step_counter: Optional[tf.Variable] = None,
+      name: Optional[Text] = None):
     """Creates a Categorical DQN Agent.
 
     Args:
@@ -268,22 +277,29 @@ class CategoricalDqnAgent(dqn_agent.DqnAgent):
     # method requires a time dimension to compute the loss properly.
     self._check_trajectory_dimensions(experience)
 
+    squeeze_time_dim = not self._q_network.state_spec
     if self._n_step_update == 1:
-      time_steps, actions, next_time_steps = self._experience_to_transitions(
-          experience)
+      time_steps, policy_steps, next_time_steps = (
+          trajectory.experience_to_transitions(experience, squeeze_time_dim))
+      actions = policy_steps.action
     else:
       # To compute n-step returns, we need the first time steps, the first
       # actions, and the last time steps. Therefore we extract the first and
       # last transitions from our Trajectory.
       first_two_steps = tf.nest.map_structure(lambda x: x[:, :2], experience)
       last_two_steps = tf.nest.map_structure(lambda x: x[:, -2:], experience)
-      time_steps, actions, _ = self._experience_to_transitions(first_two_steps)
-      _, _, next_time_steps = self._experience_to_transitions(last_two_steps)
+      time_steps, policy_steps, _ = (
+          trajectory.experience_to_transitions(
+              first_two_steps, squeeze_time_dim))
+      actions = policy_steps.action
+      _, _, next_time_steps = (
+          trajectory.experience_to_transitions(
+              last_two_steps, squeeze_time_dim))
 
     with tf.name_scope('critic_loss'):
-      tf.nest.assert_same_structure(actions, self.action_spec)
-      tf.nest.assert_same_structure(time_steps, self.time_step_spec)
-      tf.nest.assert_same_structure(next_time_steps, self.time_step_spec)
+      nest_utils.assert_same_structure(actions, self.action_spec)
+      nest_utils.assert_same_structure(time_steps, self.time_step_spec)
+      nest_utils.assert_same_structure(next_time_steps, self.time_step_spec)
 
       rank = nest_utils.get_outer_rank(time_steps.observation,
                                        self._time_step_spec.observation)
@@ -393,21 +409,28 @@ class CategoricalDqnAgent(dqn_agent.DqnAgent):
       if batch_squash is not None:
         target_distribution = batch_squash.unflatten(target_distribution)
         chosen_action_logits = batch_squash.unflatten(chosen_action_logits)
-        critic_loss = tf.reduce_mean(
-            tf.reduce_sum(
-                tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(
-                    labels=target_distribution,
-                    logits=chosen_action_logits),
-                axis=1))
-      else:
-        critic_loss = tf.reduce_mean(
+        critic_loss = tf.reduce_sum(
             tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(
                 labels=target_distribution,
-                logits=chosen_action_logits))
+                logits=chosen_action_logits),
+            axis=1)
+      else:
+        critic_loss = tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(
+            labels=target_distribution,
+            logits=chosen_action_logits)
 
-      with tf.name_scope('Losses/'):
-        tf.compat.v2.summary.scalar(
-            'critic_loss', critic_loss, step=self.train_step_counter)
+      agg_loss = common.aggregate_losses(
+          per_example_loss=critic_loss,
+          regularization_loss=self._q_network.losses)
+      total_loss = agg_loss.total_loss
+
+      dict_losses = {'critic_loss': agg_loss.weighted,
+                     'reg_loss': agg_loss.regularization,
+                     'total_loss': total_loss}
+
+      common.summarize_scalar_dict(dict_losses,
+                                   step=self.train_step_counter,
+                                   name_scope='Losses/')
 
       if self._debug_summaries:
         distribution_errors = target_distribution - chosen_action_logits
@@ -434,8 +457,8 @@ class CategoricalDqnAgent(dqn_agent.DqnAgent):
 
       # TODO(b/127318640): Give appropriate values for td_loss and td_error for
       # prioritized replay.
-      return tf_agent.LossInfo(critic_loss, dqn_agent.DqnLossInfo(td_loss=(),
-                                                                  td_error=()))
+      return tf_agent.LossInfo(total_loss, dqn_agent.DqnLossInfo(td_loss=(),
+                                                                 td_error=()))
 
   def _next_q_distribution(self, next_time_steps):
     """Compute the q distribution of the next state for TD error computation.
@@ -474,8 +497,10 @@ class CategoricalDqnAgent(dqn_agent.DqnAgent):
 # The following method is copied from the Dopamine codebase with permission
 # (https://github.com/google/dopamine). Thanks to Marc Bellemare and also to
 # Pablo Castro, who wrote the original version of this method.
-def project_distribution(supports, weights, target_support,
-                         validate_args=False):
+def project_distribution(supports: types.Tensor,
+                         weights: types.Tensor,
+                         target_support: types.Tensor,
+                         validate_args: bool = False) -> types.Tensor:
   """Projects a batch of (support, weights) onto target_support.
 
   Based on equation (7) in (Bellemare et al., 2017):

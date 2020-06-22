@@ -19,11 +19,11 @@ from __future__ import division
 from __future__ import print_function
 
 import gin
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 import tensorflow_probability as tfp
 
 from tf_agents.distributions import utils as distribution_utils
-from tf_agents.networks import bias_layer
+from tf_agents.keras_layers import bias_layer
 from tf_agents.networks import network
 from tf_agents.networks import utils as network_utils
 from tf_agents.specs import distribution_spec
@@ -143,10 +143,16 @@ class NormalProjectionNetwork(network.DistributionNetwork):
     return distribution_spec.DistributionSpec(
         distribution_builder, input_param_spec, sample_spec=sample_spec)
 
-  def call(self, inputs, outer_rank, training=False):
+  def call(self, inputs, outer_rank, training=False, mask=None):
     if inputs.dtype != self._sample_spec.dtype:
       raise ValueError(
           'Inputs to NormalProjectionNetwork must match the sample_spec.dtype.')
+
+    if mask is not None:
+      raise NotImplementedError(
+          'NormalProjectionNetwork does not yet implement action masking; got '
+          'mask={}'.format(mask))
+
     # outer_rank is needed because the projection is not done on the raw
     # observations so getting the outer rank is hard as there is no spec to
     # compare to.
@@ -174,4 +180,4 @@ class NormalProjectionNetwork(network.DistributionNetwork):
     means = batch_squash.unflatten(means)
     stds = batch_squash.unflatten(stds)
 
-    return self.output_spec.build_distribution(loc=means, scale=stds)
+    return self.output_spec.build_distribution(loc=means, scale=stds), ()

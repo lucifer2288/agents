@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Lint as: python2, python3
 """Tests for TF Agents ppo_agent."""
 
 from __future__ import absolute_import
@@ -24,7 +25,8 @@ from absl.testing import parameterized
 from absl.testing.absltest import mock
 
 import numpy as np
-import tensorflow as tf
+from six.moves import range
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 import tensorflow_probability as tfp
 
 from tf_agents.agents.ppo import ppo_agent
@@ -51,21 +53,26 @@ FLAGS = flags.FLAGS
 
 class DummyActorNet(network.DistributionNetwork):
 
-  def __init__(self, input_spec, action_spec, name=None):
+  def __init__(self,
+               input_spec,
+               action_spec,
+               preprocessing_layers=None,
+               name=None):
     output_spec = self._get_normal_distribution_spec(action_spec)
     super(DummyActorNet, self).__init__(
         input_spec, (), output_spec=output_spec, name='DummyActorNet')
     self._action_spec = action_spec
     self._flat_action_spec = tf.nest.flatten(self._action_spec)[0]
 
-    self._layers.append(
+    self._dummy_layers = (preprocessing_layers or []) + [
         tf.keras.layers.Dense(
             self._flat_action_spec.shape.num_elements() * 2,
             kernel_initializer=tf.compat.v1.initializers.constant([[2.0, 1.0],
                                                                    [1.0, 1.0]]),
             bias_initializer=tf.compat.v1.initializers.constant([5.0, 5.0]),
             activation=None,
-        ))
+        )
+    ]
 
   def _get_normal_distribution_spec(self, sample_spec):
     input_param_shapes = tfp.distributions.Normal.param_static_shapes(
@@ -92,7 +99,7 @@ class DummyActorNet(network.DistributionNetwork):
     batch_squash = network_utils.BatchSquash(outer_rank)
     hidden_state = batch_squash.flatten(hidden_state)
 
-    for layer in self.layers:
+    for layer in self._dummy_layers:
       hidden_state = layer(hidden_state)
 
     actions, stdevs = tf.split(hidden_state, 2, axis=1)
@@ -107,21 +114,26 @@ class DummyActorNet(network.DistributionNetwork):
 
 class DummyValueNet(network.Network):
 
-  def __init__(self, observation_spec, name=None, outer_rank=1):
+  def __init__(self,
+               observation_spec,
+               preprocessing_layers=None,
+               name=None,
+               outer_rank=1):
     super(DummyValueNet, self).__init__(observation_spec, (), 'DummyValueNet')
     self._outer_rank = outer_rank
-    self._layers.append(
+    self._dummy_layers = (preprocessing_layers or []) + [
         tf.keras.layers.Dense(
             1,
             kernel_initializer=tf.compat.v1.initializers.constant([2, 1]),
-            bias_initializer=tf.compat.v1.initializers.constant([5])))
+            bias_initializer=tf.compat.v1.initializers.constant([5]))
+    ]
 
   def call(self, inputs, step_type=None, network_state=()):
     del step_type
     hidden_state = tf.cast(tf.nest.flatten(inputs), tf.float32)[0]
     batch_squash = network_utils.BatchSquash(self._outer_rank)
     hidden_state = batch_squash.flatten(hidden_state)
-    for layer in self.layers:
+    for layer in self._dummy_layers:
       hidden_state = layer(hidden_state)
     value_pred = tf.squeeze(batch_squash.unflatten(hidden_state), axis=-1)
     return value_pred, network_state
@@ -134,6 +146,21 @@ def _compute_returns_fn(rewards, discounts, next_state_return=0.0):
     returns[t] = rewards[t] + discounts[t] * next_state_return
     next_state_return = returns[t]
   return returns
+
+
+def _create_joint_actor_value_networks(observation_spec, action_spec):
+  shared_layers = [
+      tf.keras.layers.Dense(
+          tf.nest.flatten(observation_spec)[0].shape.num_elements(),
+          kernel_initializer=tf.compat.v1.initializers.constant([[3.0, 1.0],
+                                                                 [1.0, 1.0]]),
+          bias_initializer=tf.compat.v1.initializers.constant([5.0, 5.0]),
+          activation=None,
+      )
+  ]
+  actor_net = DummyActorNet(observation_spec, action_spec, shared_layers)
+  value_net = DummyValueNet(observation_spec, shared_layers)
+  return actor_net, value_net
 
 
 class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
@@ -151,6 +178,7 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
         self._action_spec,
         tf.compat.v1.train.AdamOptimizer(),
         actor_net=DummyActorNet(self._obs_spec, self._action_spec),
+        value_net=DummyValueNet(self._obs_spec),
         check_numerics=True)
     agent.initialize()
 
@@ -209,11 +237,154 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
                                           value_preds)
     self.assertAllClose(gae_vals, advantages)
 
+  def testSequencePreprocess(self):
+    counter = common.create_variable('test_train_counter')
+    batch_size = 2
+    n_time_steps = 3
+    agent = ppo_agent.PPOAgent(
+        self._time_step_spec,
+        self._action_spec,
+        tf.compat.v1.train.AdamOptimizer(),
+        actor_net=DummyActorNet(
+            self._obs_spec,
+            self._action_spec,
+        ),
+        value_net=DummyValueNet(self._obs_spec),
+        normalize_observations=False,
+        num_epochs=1,
+        use_gae=False,
+        use_td_lambda_return=False,
+        compute_value_and_advantage_in_train=False,
+        train_step_counter=counter)
+    observations = tf.constant([
+        [[1, 2], [3, 4], [5, 6]],
+        [[1, 2], [3, 4], [5, 6]],
+    ],
+                               dtype=tf.float32)
+
+    mid_time_step_val = ts.StepType.MID.tolist()
+    time_steps = ts.TimeStep(
+        step_type=tf.constant(
+            [[mid_time_step_val] * n_time_steps] * batch_size, dtype=tf.int32),
+        reward=tf.constant([[1] * n_time_steps] * batch_size, dtype=tf.float32),
+        discount=tf.constant(
+            [[1] * n_time_steps] * batch_size, dtype=tf.float32),
+        observation=observations)
+    actions = tf.constant([[[0], [1], [1]], [[0], [1], [1]]], dtype=tf.float32)
+
+    old_action_distribution_parameters = {
+        'loc':
+            tf.constant(
+                [[[0.0]] * n_time_steps] * batch_size, dtype=tf.float32),
+        'scale':
+            tf.constant(
+                [[[1.0]] * n_time_steps] * batch_size, dtype=tf.float32),
+    }
+
+    value_preds = tf.constant([[9., 15., 21.], [9., 15., 21.]],
+                              dtype=tf.float32)
+    policy_info = {
+        'dist_params': old_action_distribution_parameters,
+        'value_prediction': value_preds,
+    }
+    experience = trajectory.Trajectory(time_steps.step_type, observations,
+                                       actions, policy_info,
+                                       time_steps.step_type, time_steps.reward,
+                                       time_steps.discount)
+
+    returned_experience = agent.preprocess_sequence(experience)
+    self.evaluate(tf.compat.v1.initialize_all_variables())
+
+    self.assertAllClose(observations, returned_experience.observation)
+    self.assertAllClose(actions, returned_experience.action)
+
+    expected_value_preds = tf.constant([[9., 15., 21.], [9., 15., 21.]],
+                                       dtype=tf.float32)
+    (_, _, next_time_steps) = trajectory.to_transition(experience)
+    expected_returns, expected_normalized_advantages = agent.compute_return_and_advantage(
+        next_time_steps, expected_value_preds)
+    self.assertAllClose(old_action_distribution_parameters,
+                        returned_experience.policy_info['dist_params'])
+    self.assertEqual((batch_size, n_time_steps),
+                     returned_experience.policy_info['return'].shape)
+    self.assertAllClose(expected_returns,
+                        returned_experience.policy_info['return'][:, :-1])
+    self.assertEqual(
+        (batch_size, n_time_steps),
+        returned_experience.policy_info['normalized_advantage'].shape)
+    self.assertAllClose(
+        expected_normalized_advantages,
+        returned_experience.policy_info['normalized_advantage'][:, :-1])
+
+  def testSequencePreprocessNotBatched(self):
+    counter = common.create_variable('test_train_counter')
+    n_time_steps = 3
+    agent = ppo_agent.PPOAgent(
+        self._time_step_spec,
+        self._action_spec,
+        tf.compat.v1.train.AdamOptimizer(),
+        actor_net=DummyActorNet(
+            self._obs_spec,
+            self._action_spec,
+        ),
+        value_net=DummyValueNet(self._obs_spec),
+        normalize_observations=False,
+        num_epochs=1,
+        use_gae=False,
+        use_td_lambda_return=False,
+        compute_value_and_advantage_in_train=False,
+        train_step_counter=counter)
+    observations = tf.constant([[1, 2], [3, 4], [5, 6]], dtype=tf.float32)
+
+    mid_time_step_val = ts.StepType.MID.tolist()
+    time_steps = ts.TimeStep(
+        step_type=tf.constant(
+            [mid_time_step_val] * n_time_steps, dtype=tf.int32),
+        reward=tf.constant([1] * n_time_steps, dtype=tf.float32),
+        discount=tf.constant([1] * n_time_steps, dtype=tf.float32),
+        observation=observations)
+    actions = tf.constant([[0], [1], [1]], dtype=tf.float32)
+
+    old_action_distribution_parameters = {
+        'loc': tf.constant([[0.0]] * n_time_steps, dtype=tf.float32),
+        'scale': tf.constant([[1.0]] * n_time_steps, dtype=tf.float32),
+    }
+
+    value_preds = tf.constant([9., 15., 21.], dtype=tf.float32)
+    policy_info = {
+        'dist_params': old_action_distribution_parameters,
+        'value_prediction': value_preds,
+    }
+    experience = trajectory.Trajectory(time_steps.step_type, observations,
+                                       actions, policy_info,
+                                       time_steps.step_type, time_steps.reward,
+                                       time_steps.discount)
+
+    returned_experience = agent.preprocess_sequence(experience)
+    self.evaluate(tf.compat.v1.initialize_all_variables())
+
+    self.assertAllClose(observations, returned_experience.observation)
+    self.assertAllClose(actions, returned_experience.action)
+
+    self.assertAllClose(old_action_distribution_parameters,
+                        returned_experience.policy_info['dist_params'])
+    self.assertEqual(n_time_steps,
+                     returned_experience.policy_info['return'].shape)
+    self.assertAllClose([40.4821, 30.79],
+                        returned_experience.policy_info['return'][:-1])
+    self.assertEqual(
+        n_time_steps,
+        returned_experience.policy_info['normalized_advantage'].shape)
+    self.assertAllClose(
+        [1., -1.], returned_experience.policy_info['normalized_advantage'][:-1])
+
   @parameterized.named_parameters([
-      ('OneEpoch', 1, True),
-      ('FiveEpochs', 5, False),
+      ('OneEpochValueInTrain', 1, True, True),
+      ('FiveEpochsValueInCollect', 5, False, False),
+      ('IncompleteEpisodesReturnNonZeroLoss', 1, False, True),
   ])
-  def testTrain(self, num_epochs, use_td_lambda_return):
+  def testTrain(self, num_epochs, use_td_lambda_return,
+                compute_value_and_advantage_in_train):
     # Mock the build_train_op to return an op for incrementing this counter.
     counter = common.create_variable('test_train_counter')
     agent = ppo_agent.PPOAgent(
@@ -229,6 +400,7 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
         num_epochs=num_epochs,
         use_gae=use_td_lambda_return,
         use_td_lambda_return=use_td_lambda_return,
+        compute_value_and_advantage_in_train=compute_value_and_advantage_in_train,
         train_step_counter=counter)
     observations = tf.constant([
         [[1, 2], [3, 4], [5, 6]],
@@ -236,8 +408,9 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
     ],
                                dtype=tf.float32)
 
+    mid_time_step_val = ts.StepType.MID.tolist()
     time_steps = ts.TimeStep(
-        step_type=tf.constant([[1] * 3] * 2, dtype=tf.int32),
+        step_type=tf.constant([[mid_time_step_val] * 3] * 2, dtype=tf.int32),
         reward=tf.constant([[1] * 3] * 2, dtype=tf.float32),
         discount=tf.constant([[1] * 3] * 2, dtype=tf.float32),
         observation=observations)
@@ -247,13 +420,20 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
         'loc': tf.constant([[[0.0]] * 3] * 2, dtype=tf.float32),
         'scale': tf.constant([[[1.0]] * 3] * 2, dtype=tf.float32),
     }
+    value_preds = tf.constant([[9., 15., 21.], [9., 15., 21.]],
+                              dtype=tf.float32)
 
-    policy_info = action_distribution_parameters
-
+    policy_info = {
+        'dist_params': action_distribution_parameters,
+    }
+    if not compute_value_and_advantage_in_train:
+      policy_info['value_prediction'] = value_preds
     experience = trajectory.Trajectory(time_steps.step_type, observations,
                                        actions, policy_info,
                                        time_steps.step_type, time_steps.reward,
                                        time_steps.discount)
+    if not compute_value_and_advantage_in_train:
+      experience = agent._preprocess(experience)
 
     if tf.executing_eagerly():
       loss = lambda: agent.train(experience)
@@ -261,9 +441,18 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
       loss = agent.train(experience)
 
     # Assert that counter starts out at zero.
-    self.evaluate(tf.compat.v1.global_variables_initializer())
+    self.evaluate(tf.compat.v1.initialize_all_variables())
     self.assertEqual(0, self.evaluate(counter))
-    self.evaluate(loss)
+    loss_type = self.evaluate(loss)
+    loss_numpy = loss_type.loss
+
+    # Assert that loss is not zero as we are training in a non-episodic env.
+    self.assertNotEqual(
+        loss_numpy,
+        0.0,
+        msg=('Loss is exactly zero, looks like no training '
+             'was performed due to incomplete episodes.'))
+
     # Assert that train_op ran increment_counter num_epochs times.
     self.assertEqual(num_epochs, self.evaluate(counter))
 
@@ -297,7 +486,7 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
     }
     train_step = tf.compat.v1.train.get_or_create_global_step()
 
-    loss_info = agent.get_epoch_loss(
+    loss_info = agent.get_loss(
         time_steps,
         actions,
         sample_action_log_probs,
@@ -383,6 +572,58 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
       ('IsZero', 0),
       ('NotZero', 1),
   ])
+  def testL2RegularizationLossWithSharedVariables(self, not_zero):
+    policy_l2_reg = 4e-4 * not_zero
+    value_function_l2_reg = 2e-4 * not_zero
+    shared_vars_l2_reg = 1e-4 * not_zero
+    actor_net, value_net = _create_joint_actor_value_networks(
+        self._obs_spec, self._action_spec)
+    agent = ppo_agent.PPOAgent(
+        self._time_step_spec,
+        self._action_spec,
+        tf.compat.v1.train.AdamOptimizer(),
+        actor_net=actor_net,
+        value_net=value_net,
+        normalize_observations=False,
+        policy_l2_reg=policy_l2_reg,
+        value_function_l2_reg=value_function_l2_reg,
+        shared_vars_l2_reg=shared_vars_l2_reg,
+    )
+
+    # Call other loss functions to make sure trainable variables are
+    #   constructed.
+    observations = tf.constant([[1, 2], [3, 4]], dtype=tf.float32)
+    time_steps = ts.restart(observations, batch_size=2)
+    actions = tf.constant([[0], [1]], dtype=tf.float32)
+    returns = tf.constant([1.9, 1.0], dtype=tf.float32)
+    sample_action_log_probs = tf.constant([[0.9], [0.3]], dtype=tf.float32)
+    advantages = tf.constant([1.9, 1.0], dtype=tf.float32)
+    current_policy_distribution, unused_network_state = DummyActorNet(
+        self._obs_spec, self._action_spec)(time_steps.observation,
+                                           time_steps.step_type, ())
+    weights = tf.ones_like(advantages)
+    agent.policy_gradient_loss(time_steps, actions, sample_action_log_probs,
+                               advantages, current_policy_distribution, weights)
+    agent.value_estimation_loss(time_steps, returns, weights)
+
+    # Now request L2 regularization loss.
+    # Value function weights are [2, 1], actor net weights are [2, 1, 1, 1],
+    # shared weights are [3, 1, 1, 1].
+    expected_loss = value_function_l2_reg * (2**2 + 1) + policy_l2_reg * (
+        2**2 + 1 + 1 + 1) + shared_vars_l2_reg * (3**2 + 1 + 1 + 1)
+    # Make sure the network is built before we try to get variables.
+    agent.policy.action(
+        tensor_spec.sample_spec_nest(self._time_step_spec, outer_dims=(2,)))
+    loss = agent.l2_regularization_loss()
+
+    self.evaluate(tf.compat.v1.global_variables_initializer())
+    loss_ = self.evaluate(loss)
+    self.assertAllClose(loss_, expected_loss)
+
+  @parameterized.named_parameters([
+      ('IsZero', 0),
+      ('NotZero', 1),
+  ])
   def testEntropyRegularizationLoss(self, not_zero):
     ent_reg = 0.1 * not_zero
     agent = ppo_agent.PPOAgent(
@@ -454,6 +695,7 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
         normalize_observations=False,
         normalize_rewards=False,
         actor_net=actor_net,
+        value_net=DummyValueNet(self._obs_spec),
         importance_ratio_clipping=10.0,
     )
 
@@ -674,7 +916,8 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
         actor_net=actor_net,
         value_net=value_net,
         num_epochs=1,
-        train_step_counter=global_step)
+        train_step_counter=global_step,
+    )
     # Use a random env, policy, and replay buffer to collect training data.
     random_env = random_tf_environment.RandomTFEnvironment(
         self._time_step_spec, self._action_spec, batch_size=1)
@@ -705,6 +948,79 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
     self.evaluate(agent.train(experience=replay_buffer.gather_all()))
     self.assertEqual(1, self.evaluate(global_step))
 
+  @parameterized.named_parameters([
+      ('ValueCalculationInTrain', True),
+      ('ValueCalculationInCollect', False),
+  ])
+  def testStatelessValueNetTrain(self, compute_value_and_advantage_in_train):
+    counter = common.create_variable('test_train_counter')
+    actor_net = actor_distribution_rnn_network.ActorDistributionRnnNetwork(
+        self._time_step_spec.observation,
+        self._action_spec,
+        input_fc_layer_params=None,
+        output_fc_layer_params=None,
+        lstm_size=(20,))
+    value_net = value_network.ValueNetwork(
+        self._time_step_spec.observation, fc_layer_params=None)
+    agent = ppo_agent.PPOAgent(
+        self._time_step_spec,
+        self._action_spec,
+        optimizer=tf.compat.v1.train.AdamOptimizer(),
+        actor_net=actor_net,
+        value_net=value_net,
+        num_epochs=1,
+        train_step_counter=counter,
+        compute_value_and_advantage_in_train=compute_value_and_advantage_in_train
+    )
+    observations = tf.constant([
+        [[1, 2], [3, 4], [5, 6]],
+        [[1, 2], [3, 4], [5, 6]],
+    ],
+                               dtype=tf.float32)
+
+    mid_time_step_val = ts.StepType.MID.tolist()
+    time_steps = ts.TimeStep(
+        step_type=tf.constant([[mid_time_step_val] * 3] * 2, dtype=tf.int32),
+        reward=tf.constant([[1] * 3] * 2, dtype=tf.float32),
+        discount=tf.constant([[1] * 3] * 2, dtype=tf.float32),
+        observation=observations)
+    actions = tf.constant([[[0], [1], [1]], [[0], [1], [1]]], dtype=tf.float32)
+
+    action_distribution_parameters = {
+        'loc': tf.constant([[[0.0]] * 3] * 2, dtype=tf.float32),
+        'scale': tf.constant([[[1.0]] * 3] * 2, dtype=tf.float32),
+    }
+    value_preds = tf.constant([[9., 15., 21.], [9., 15., 21.]],
+                              dtype=tf.float32)
+
+    policy_info = {
+        'dist_params': action_distribution_parameters,
+    }
+    if not compute_value_and_advantage_in_train:
+      policy_info['value_prediction'] = value_preds
+    experience = trajectory.Trajectory(time_steps.step_type, observations,
+                                       actions, policy_info,
+                                       time_steps.step_type, time_steps.reward,
+                                       time_steps.discount)
+    if not compute_value_and_advantage_in_train:
+      experience = agent._preprocess(experience)
+
+    if tf.executing_eagerly():
+      loss = lambda: agent.train(experience)
+    else:
+      loss = agent.train(experience)
+
+    self.evaluate(tf.compat.v1.initialize_all_variables())
+
+    loss_type = self.evaluate(loss)
+    loss_numpy = loss_type.loss
+    # Assert that loss is not zero as we are training in a non-episodic env.
+    self.assertNotEqual(
+        loss_numpy,
+        0.0,
+        msg=('Loss is exactly zero, looks like no training '
+             'was performed due to incomplete episodes.'))
+
   def testAgentDoesNotFailWhenNestedObservationActionAndDebugSummaries(self):
     summary_writer = tf.compat.v2.summary.create_file_writer(
         FLAGS.test_tmpdir, flush_millis=10000)
@@ -734,8 +1050,9 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
             name='NestedActorNet')
         self.dummy_model = dummy_model
 
-      def call(self, *args, **kwargs):
-        dummy_ans, _ = self.dummy_model(*args, **kwargs)
+      def call(self, inputs, network_state, *args, **kwargs):
+        dummy_ans, _ = self.dummy_model(
+            inputs, network_state=network_state, *args, **kwargs)
         return (dummy_ans, {'c': dummy_ans, 'd': dummy_ans}), ()
 
     dummy_model = DummyActorNet(nested_obs_spec, self._action_spec)
@@ -745,6 +1062,7 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
         tf.compat.v1.train.AdamOptimizer(),
         actor_net=NestedActorNet(dummy_model),
         value_net=DummyValueNet(nested_obs_spec),
+        compute_value_and_advantage_in_train=False,
         debug_summaries=True)
 
     observations = tf.constant([
@@ -779,12 +1097,18 @@ class PPOAgentTest(parameterized.TestCase, test_utils.TestCase):
         'd': action_distribution_parameters,
     })
 
-    policy_info = action_distribution_parameters
+    value_preds = tf.constant([[9., 15., 21.], [9., 15., 21.]],
+                              dtype=tf.float32)
+    policy_info = {
+        'dist_params': action_distribution_parameters,
+        'value_prediction': value_preds,
+    }
 
     experience = trajectory.Trajectory(time_steps.step_type, observations,
                                        actions, policy_info,
                                        time_steps.step_type, time_steps.reward,
                                        time_steps.discount)
+    experience = agent._preprocess(experience)
 
     agent.train(experience)
 

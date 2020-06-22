@@ -32,7 +32,7 @@ from __future__ import division
 from __future__ import print_function
 
 import gin
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 
 from tf_agents.networks import lstm_encoding_network
 from tf_agents.networks import network
@@ -123,7 +123,7 @@ class ValueRnnNetwork(network.Network):
   def call(self,
            observation,
            step_type=None,
-           network_state=None,
+           network_state=(),
            training=False):
     state, network_state = self._lstm_encoder(
         observation, step_type=step_type, network_state=network_state,

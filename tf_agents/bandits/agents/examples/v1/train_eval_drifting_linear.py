@@ -24,7 +24,7 @@ import os
 from absl import app
 from absl import flags
 
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 import tensorflow_probability as tfp
 from tf_agents.bandits.agents import lin_ucb_agent
 from tf_agents.bandits.agents import linear_thompson_sampling_agent as lin_ts_agent
@@ -56,7 +56,7 @@ AGENT_ALPHA = 10.0
 
 
 def main(unused_argv):
-  tf.enable_resource_variables()
+  tf.compat.v1.enable_resource_variables()
 
   with tf.device('/CPU:0'):  # due to b/128333994
     observation_shape = [CONTEXT_DIM]

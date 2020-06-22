@@ -18,7 +18,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 from tf_agents.networks import network
 from tf_agents.policies import boltzmann_policy
 from tf_agents.policies import q_policy
@@ -32,17 +32,20 @@ class DummyNet(network.Network):
   def __init__(self, name=None, num_actions=2):
     super(DummyNet, self).__init__(
         tensor_spec.TensorSpec([2], tf.float32), (), 'DummyNet')
-    self._layers.append(
+
+    # Store custom layers that can be serialized through the Checkpointable API.
+    self._dummy_layers = [
         tf.keras.layers.Dense(
             num_actions,
             kernel_initializer=tf.compat.v1.initializers.constant([[1, 1.5],
                                                                    [1, 1.5]]),
-            bias_initializer=tf.compat.v1.initializers.constant([[1], [1]])))
+            bias_initializer=tf.compat.v1.initializers.constant([[1], [1]]))
+    ]
 
   def call(self, inputs, step_type=None, network_state=()):
     del step_type
     inputs = tf.cast(inputs, tf.float32)
-    for layer in self.layers:
+    for layer in self._dummy_layers:
       inputs = layer(inputs)
     return inputs, network_state
 
@@ -76,7 +79,7 @@ class BoltzmannPolicyTest(test_utils.TestCase):
     self.assertEqual(action_step.action.dtype, tf.int32)
     # Initialize all variables
     self.evaluate(tf.compat.v1.global_variables_initializer())
-    self.assertAllEqual(self.evaluate(action_step.action), [[1], [1]])
+    self.evaluate(action_step.action)
 
   def testDistribution(self):
     tf.compat.v1.set_random_seed(1)

@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Lint as: python2, python3
 r"""Sample tf-agents trainer using a mix of graph and out of graph components.
 
 In this example we keep the agent's network and training ops in graph and use a
@@ -41,7 +42,8 @@ from absl import app
 from absl import flags
 from absl import logging
 
-import tensorflow as tf
+from six.moves import range
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 
 from tf_agents.agents.dqn import dqn_agent
 from tf_agents.environments import batched_py_environment
@@ -277,7 +279,7 @@ def train_eval(
 def main(_):
   tf.compat.v1.enable_resource_variables()
   logging.set_verbosity(logging.INFO)
-  tf.enable_resource_variables()
+  tf.compat.v1.enable_resource_variables()
   train_eval(FLAGS.root_dir, num_iterations=FLAGS.num_iterations)
 
 

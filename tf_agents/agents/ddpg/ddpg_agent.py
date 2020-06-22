@@ -21,16 +21,22 @@ Implements the Deep Deterministic Policy Gradient (DDPG) algorithm from
 
 from __future__ import absolute_import
 from __future__ import division
+# Using Type Annotations.
 from __future__ import print_function
 
 import collections
+from typing import Optional, Text
+
 import gin
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 
 from tf_agents.agents import tf_agent
+from tf_agents.networks import network
 from tf_agents.policies import actor_policy
 from tf_agents.policies import ou_noise_policy
+from tf_agents.trajectories import time_step as ts
 from tf_agents.trajectories import trajectory
+from tf_agents.typing import types
 from tf_agents.utils import common
 from tf_agents.utils import eager_utils
 from tf_agents.utils import nest_utils
@@ -46,27 +52,27 @@ class DdpgAgent(tf_agent.TFAgent):
   """A DDPG Agent."""
 
   def __init__(self,
-               time_step_spec,
-               action_spec,
-               actor_network,
-               critic_network,
-               actor_optimizer=None,
-               critic_optimizer=None,
-               ou_stddev=1.0,
-               ou_damping=1.0,
-               target_actor_network=None,
-               target_critic_network=None,
-               target_update_tau=1.0,
-               target_update_period=1,
-               dqda_clipping=None,
-               td_errors_loss_fn=None,
-               gamma=1.0,
-               reward_scale_factor=1.0,
-               gradient_clipping=None,
-               debug_summaries=False,
-               summarize_grads_and_vars=False,
-               train_step_counter=None,
-               name=None):
+               time_step_spec: ts.TimeStep,
+               action_spec: types.NestedTensorSpec,
+               actor_network: network.Network,
+               critic_network: network.Network,
+               actor_optimizer: Optional[types.Optimizer] = None,
+               critic_optimizer: Optional[types.Optimizer] = None,
+               ou_stddev: types.Float = 1.0,
+               ou_damping: types.Float = 1.0,
+               target_actor_network: Optional[network.Network] = None,
+               target_critic_network: Optional[network.Network] = None,
+               target_update_tau: types.Float = 1.0,
+               target_update_period: types.Int = 1,
+               dqda_clipping: Optional[types.Float] = None,
+               td_errors_loss_fn: Optional[types.LossFn] = None,
+               gamma: types.Float = 1.0,
+               reward_scale_factor: types.Float = 1.0,
+               gradient_clipping: Optional[types.Float] = None,
+               debug_summaries: bool = False,
+               summarize_grads_and_vars: bool = False,
+               train_step_counter: Optional[tf.Variable] = None,
+               name: Optional[Text] = None):
     """Creates a DDPG Agent.
 
     Args:
@@ -216,21 +222,11 @@ class DdpgAgent(tf_agent.TFAgent):
 
       return common.Periodically(update, period, 'periodic_update_targets')
 
-  def _experience_to_transitions(self, experience):
-    transitions = trajectory.to_transition(experience)
-
-    # Remove time dim if we are not using a recurrent network.
-    if not self._actor_network.state_spec:
-      transitions = tf.nest.map_structure(lambda x: tf.squeeze(x, [1]),
-                                          transitions)
-
-    time_steps, policy_steps, next_time_steps = transitions
-    actions = policy_steps.action
-    return time_steps, actions, next_time_steps
-
   def _train(self, experience, weights=None):
-    time_steps, actions, next_time_steps = self._experience_to_transitions(
-        experience)
+    squeeze_time_dim = not self._actor_network.state_spec
+    time_steps, policy_steps, next_time_steps = (
+        trajectory.experience_to_transitions(experience, squeeze_time_dim))
+    actions = policy_steps.action
 
     # TODO(b/124382524): Apply a loss mask or filter boundary transitions.
     trainable_critic_variables = self._critic_network.trainable_variables
@@ -280,11 +276,11 @@ class DdpgAgent(tf_agent.TFAgent):
     optimizer.apply_gradients(grads_and_vars)
 
   def critic_loss(self,
-                  time_steps,
-                  actions,
-                  next_time_steps,
-                  weights=None,
-                  training=False):
+                  time_steps: ts.TimeStep,
+                  actions: types.NestedTensor,
+                  next_time_steps: ts.TimeStep,
+                  weights: Optional[types.Tensor] = None,
+                  training: bool = False) -> types.Tensor:
     """Computes the critic loss for DDPG training.
 
     Args:
@@ -305,10 +301,6 @@ class DdpgAgent(tf_agent.TFAgent):
       target_q_values, _ = self._target_critic_network(
           target_critic_net_input, next_time_steps.step_type,
           training=False)
-      if len(target_q_values.shape) != 1:
-        raise ValueError('Q-network should output a tensor of shape (batch,) '
-                         'but shape {} was returned.'.format(
-                             target_q_values.shape.as_list()))
 
       td_targets = tf.stop_gradient(
           self._reward_scale_factor * next_time_steps.reward +
@@ -343,7 +335,10 @@ class DdpgAgent(tf_agent.TFAgent):
 
       return critic_loss
 
-  def actor_loss(self, time_steps, weights=None, training=False):
+  def actor_loss(self,
+                 time_steps: ts.TimeStep,
+                 weights: Optional[types.Tensor] = None,
+                 training: bool = False) -> types.Tensor:
     """Computes the actor_loss for DDPG training.
 
     Args:

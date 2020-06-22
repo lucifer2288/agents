@@ -15,4 +15,5 @@
 
 """Module importing all networks."""
 
+from tf_agents.bandits.networks import global_and_arm_feature_network
 from tf_agents.bandits.networks import heteroscedastic_q_network

@@ -17,28 +17,37 @@
 
 from __future__ import absolute_import
 from __future__ import division
+# Using Type Annotations.
 from __future__ import print_function
+
+from typing import Optional, Text
 
 import gin
 import numpy as np
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
+import tensorflow_probability as tfp
 
 from tf_agents.distributions import shifted_categorical
+from tf_agents.networks import network
 from tf_agents.policies import tf_policy
 from tf_agents.trajectories import policy_step
+from tf_agents.trajectories import time_step as ts
+from tf_agents.typing import types
 
 
 @gin.configurable
-class QPolicy(tf_policy.Base):
+class QPolicy(tf_policy.TFPolicy):
   """Class to build Q-Policies."""
 
-  def __init__(self,
-               time_step_spec,
-               action_spec,
-               q_network,
-               emit_log_probability=False,
-               observation_and_action_constraint_splitter=None,
-               name=None):
+  def __init__(
+      self,
+      time_step_spec: ts.TimeStep,
+      action_spec: types.NestedTensorSpec,
+      q_network: network.Network,
+      emit_log_probability: bool = False,
+      observation_and_action_constraint_splitter: Optional[
+          types.Splitter] = None,
+      name: Optional[Text] = None):
     """Builds a Q-Policy given a q_network.
 
     Args:
@@ -145,9 +154,14 @@ class QPolicy(tf_policy.Base):
       logits = tf.compat.v2.where(tf.cast(mask, tf.bool), logits, neg_inf)
 
     # TODO(kbanoop): Handle distributions over nests.
-    distribution = shifted_categorical.ShiftedCategorical(
-        logits=logits,
-        dtype=self._flat_action_spec.dtype,
-        shift=self._flat_action_spec.minimum)
+    if self._flat_action_spec.minimum != 0:
+      distribution = shifted_categorical.ShiftedCategorical(
+          logits=logits,
+          dtype=self._flat_action_spec.dtype,
+          shift=self._flat_action_spec.minimum)
+    else:
+      distribution = tfp.distributions.Categorical(
+          logits=logits,
+          dtype=self._flat_action_spec.dtype)
     distribution = tf.nest.pack_sequence_as(self._action_spec, [distribution])
     return policy_step.PolicyStep(distribution, policy_state)

@@ -20,21 +20,31 @@ Mainly used for unit tests.
 
 from __future__ import absolute_import
 from __future__ import division
+# Using Type Annotations.
 from __future__ import print_function
 
-import tensorflow as tf
+from typing import Optional, Text
+
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 import tensorflow_probability as tfp
 from tf_agents.policies import tf_policy
 from tf_agents.trajectories import policy_step
+from tf_agents.trajectories import time_step as ts
+from tf_agents.typing import types
 from tf_agents.utils import common
 from tf_agents.utils import nest_utils
 
 
-class FixedPolicy(tf_policy.Base):
+class FixedPolicy(tf_policy.TFPolicy):
   """A policy which always returns a fixed action."""
 
-  def __init__(self, actions, time_step_spec, action_spec, policy_info=(),
-               info_spec=(), name=None):
+  def __init__(self,
+               actions: types.NestedTensor,
+               time_step_spec: ts.TimeStep,
+               action_spec: types.NestedTensorSpec,
+               policy_info: types.NestedTensorSpec = (),
+               info_spec: types.NestedTensorSpec = (),
+               name: Optional[Text] = None):
     """A policy which always returns a fixed action.
 
     Args:
@@ -50,7 +60,7 @@ class FixedPolicy(tf_policy.Base):
     super(FixedPolicy, self).__init__(time_step_spec, action_spec, clip=False,
                                       info_spec=info_spec,
                                       name=name)
-    tf.nest.assert_same_structure(self._action_spec, actions)
+    nest_utils.assert_same_structure(self._action_spec, actions)
 
     def convert(action, spec):
       return tf.convert_to_tensor(value=action, dtype=spec.dtype)
@@ -65,12 +75,14 @@ class FixedPolicy(tf_policy.Base):
   def _action(self, time_step, policy_state, seed):
     del seed
     outer_shape = nest_utils.get_outer_shape(time_step, self._time_step_spec)
-    action = common.replicate(self._action_value, outer_shape)
+    action = tf.nest.map_structure(lambda t: common.replicate(t, outer_shape),
+                                   self._action_value)
     return policy_step.PolicyStep(action, policy_state, self._policy_info)
 
   def _distribution(self, time_step, policy_state):
     outer_shape = nest_utils.get_outer_shape(time_step, self._time_step_spec)
-    action = common.replicate(self._action_value, outer_shape)
+    action = tf.nest.map_structure(lambda t: common.replicate(t, outer_shape),
+                                   self._action_value)
 
     def dist_fn(action):
       """Return a categorical distribution with all density on fixed action."""

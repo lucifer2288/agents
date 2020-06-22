@@ -57,7 +57,7 @@ from absl import logging
 
 import gin
 import numpy as np
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 
 from tf_agents.agents.dqn import dqn_agent
 from tf_agents.environments import batched_py_environment
@@ -65,6 +65,7 @@ from tf_agents.environments import suite_atari
 from tf_agents.eval import metric_utils
 from tf_agents.metrics import py_metric
 from tf_agents.metrics import py_metrics
+from tf_agents.networks import network
 from tf_agents.networks import q_network
 from tf_agents.policies import epsilon_greedy_policy
 from tf_agents.policies import policy_saver
@@ -109,16 +110,30 @@ FLAGS = flags.FLAGS
 ATARI_FRAME_SKIP = 4
 
 
-class AtariQNetwork(q_network.QNetwork):
+class AtariQNetwork(network.Network):
   """QNetwork subclass that divides observations by 255."""
 
-  def call(self, observation, step_type=None, network_state=None):
+  def __init__(self, input_tensor_spec, action_spec, **kwargs):
+    super(AtariQNetwork, self).__init__(input_tensor_spec, state_spec=())
+    input_tensor_spec = tf.TensorSpec(
+        dtype=tf.float32, shape=input_tensor_spec.shape)
+    self._q_network = q_network.QNetwork(input_tensor_spec, action_spec,
+                                         **kwargs)
+
+  def call(self,
+           observation,
+           step_type=None,
+           network_state=(),
+           training=False):
     state = tf.cast(observation, tf.float32)
     # We divide the grayscale pixel values by 255 here rather than storing
     # normalized values beause uint8s are 4x cheaper to store than float32s.
     state = state / 255
-    return super(AtariQNetwork, self).call(
-        state, step_type=step_type, network_state=network_state)
+    return self._q_network(
+        state,
+        step_type=step_type,
+        network_state=network_state,
+        training=training)
 
 
 def log_metric(metric, prefix):
@@ -639,7 +654,7 @@ def get_run_args():
 
 def main(_):
   logging.set_verbosity(logging.INFO)
-  tf.enable_resource_variables()
+  tf.compat.v1.enable_resource_variables()
   environment_name = FLAGS.environment_name
   if environment_name is None:
     environment_name = suite_atari.game(name=FLAGS.game_name)

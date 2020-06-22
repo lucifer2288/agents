@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Lint as: python2, python3
 r"""Train and Eval DQN.
 
 To run:
@@ -37,7 +38,8 @@ from absl import app
 from absl import flags
 from absl import logging
 
-import tensorflow as tf
+from six.moves import range
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 
 from tf_agents.agents.dqn import dqn_agent
 from tf_agents.drivers import dynamic_episode_driver
@@ -290,7 +292,7 @@ def train_eval(
 
 def main(_):
   logging.set_verbosity(logging.INFO)
-  tf.enable_resource_variables()
+  tf.compat.v1.enable_resource_variables()
   train_eval(
       FLAGS.root_dir,
       num_iterations=FLAGS.num_iterations,

@@ -25,7 +25,7 @@ import random
 from absl import flags
 from absl.testing import parameterized
 import numpy as np
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 import tensorflow_probability as tfp
 from tf_agents.networks import test_utils as networks_test_utils
 from tf_agents.specs import tensor_spec
@@ -794,6 +794,15 @@ class ReplicateTensorTest(test_utils.TestCase, parameterized.TestCase):
       self.assertEqual(tf.TensorShape(outer_shape + list(value.shape)),
                        replicated_value.shape)
 
+  def testReplicateScalarTensor(self):
+    value = 1
+    outer_shape = [2, 1]
+    expected_replicated_value = np.array([[value], [value]])
+
+    tf_value = tf.constant(value, shape=())
+    replicated_value = self.evaluate(common.replicate(tf_value, outer_shape))
+    self.assertAllEqual(expected_replicated_value, replicated_value)
+
 
 class FunctionTest(test_utils.TestCase):
 
@@ -815,6 +824,32 @@ class FunctionTest(test_utils.TestCase):
     z = add(tf.constant(1.0), 2.0)
 
     self.assertAllClose(3.0, self.evaluate(z))
+
+
+class DefaultTFFunctionParams(test_utils.TestCase):
+
+  def testAutographRequired(self):
+
+    def inner_fn_requires_autograph(a, b):
+      for v in a:
+        b += v
+      return b
+
+    inner_fn = common.function(inner_fn_requires_autograph)
+    # Using general exception to avoid internal TF import.
+    with self.assertRaises(Exception):
+      inner_fn(tf.convert_to_tensor([1, 2, 3]), tf.constant(0))
+
+  def testAutographEnabling(self):
+
+    @common.set_default_tf_function_parameters(autograph=True)
+    def inner_fn_requires_autograph(a, b):
+      for v in a:
+        b += v
+      return b
+
+    inner_fn = common.function(inner_fn_requires_autograph)
+    inner_fn(tf.convert_to_tensor([1, 2, 3]), tf.constant(0))
 
 
 class SpecSaveTest(tf.test.TestCase, parameterized.TestCase):

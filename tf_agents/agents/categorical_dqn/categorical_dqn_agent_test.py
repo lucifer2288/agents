@@ -20,7 +20,7 @@ from __future__ import division
 from __future__ import print_function
 
 import numpy as np
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 from tf_agents.agents.categorical_dqn import categorical_dqn_agent
 from tf_agents.networks import categorical_q_network
 from tf_agents.networks import network
@@ -125,7 +125,7 @@ class DummyCategoricalQRnnNetwork(q_rnn_network.QRnnNetwork):
   def num_atoms(self):
     return self._num_atoms
 
-  def call(self, observations, step_type=None, network_state=None):
+  def call(self, observations, step_type=None, network_state=()):
     logits, network_state = super(DummyCategoricalQRnnNetwork, self).call(
         observations, step_type, network_state)
     shape = logits.shape.as_list()

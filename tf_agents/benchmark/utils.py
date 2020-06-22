@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Lint as: python2, python3
 """Utilities for running benchmarks."""
 
 from __future__ import absolute_import
@@ -22,7 +23,9 @@ from __future__ import print_function
 import time
 
 import numpy as np
-import tensorflow as tf
+from six.moves import range
+from six.moves import zip
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 
 
 def run_test(target_call,
@@ -50,7 +53,7 @@ def run_test(target_call,
   for _ in range(num_steps):
     history.on_batch_begin()
     if strategy:
-      strategy.experimental_run_v2(target_call)
+      strategy.run(target_call)
     else:
       target_call()
     history.on_batch_end()

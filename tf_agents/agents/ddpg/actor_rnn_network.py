@@ -22,8 +22,8 @@ returned.
 
 import functools
 import gin
-import tensorflow as tf
-from tf_agents.networks import dynamic_unroll_layer
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
+from tf_agents.keras_layers import dynamic_unroll_layer
 from tf_agents.networks import network
 from tf_agents.networks import utils
 from tf_agents.specs import tensor_spec
@@ -121,7 +121,7 @@ class ActorRnnNetwork(network.Network):
     self._action_layers = action_layers
 
   # TODO(kbanoop): Standardize argument names across different networks.
-  def call(self, observation, step_type, network_state=None, training=False):
+  def call(self, observation, step_type, network_state=(), training=False):
     num_outer_dims = nest_utils.get_outer_rank(observation,
                                                self.input_tensor_spec)
     if num_outer_dims not in (1, 2):
@@ -150,7 +150,7 @@ class ActorRnnNetwork(network.Network):
     # Unroll over the time sequence.
     states, network_state = self._dynamic_unroll(
         states,
-        reset_mask,
+        reset_mask=reset_mask,
         initial_state=network_state,
         training=training)
 

@@ -20,30 +20,38 @@ TODO(kbanoop): Make policy state optional in the action method.
 
 from __future__ import absolute_import
 from __future__ import division
+# Using Type Annotations.
 from __future__ import print_function
 
+from typing import Optional, Text
+
 import gin
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 import tensorflow_probability as tfp
 
+from tf_agents.bandits.policies import policy_utilities
 from tf_agents.policies import greedy_policy
 from tf_agents.policies import random_tf_policy
 from tf_agents.policies import tf_policy
 from tf_agents.trajectories import policy_step
+from tf_agents.typing import types
 from tf_agents.utils import nest_utils
 
 tfd = tfp.distributions
 
 
 @gin.configurable(module='tf_agents', blacklist=['policy'])
-class EpsilonGreedyPolicy(tf_policy.Base):
+class EpsilonGreedyPolicy(tf_policy.TFPolicy):
   """Returns epsilon-greedy samples of a given policy."""
 
-  def __init__(self, policy, epsilon, name=None):
+  def __init__(self,
+               policy: tf_policy.TFPolicy,
+               epsilon: types.FloatOrReturningFloat,
+               name: Optional[Text] = None):
     """Builds an epsilon-greedy MixturePolicy wrapping the given policy.
 
     Args:
-      policy: A policy implementing the tf_policy.Base interface.
+      policy: A policy implementing the tf_policy.TFPolicy interface.
       epsilon: The probability of taking the random action represented as a
         float scalar, a scalar Tensor of shape=(), or a callable that returns a
         float scalar or Tensor.
@@ -54,6 +62,8 @@ class EpsilonGreedyPolicy(tf_policy.Base):
     """
     observation_and_action_constraint_splitter = getattr(
         policy, 'observation_and_action_constraint_splitter', None)
+    accepts_per_arm_features = getattr(policy, 'accepts_per_arm_features',
+                                       False)
     self._greedy_policy = greedy_policy.GreedyPolicy(policy)
     self._epsilon = epsilon
     self._random_policy = random_tf_policy.RandomTFPolicy(
@@ -62,6 +72,7 @@ class EpsilonGreedyPolicy(tf_policy.Base):
         emit_log_probability=policy.emit_log_probability,
         observation_and_action_constraint_splitter=(
             observation_and_action_constraint_splitter),
+        accepts_per_arm_features=accepts_per_arm_features,
         info_spec=policy.info_spec)
     super(EpsilonGreedyPolicy, self).__init__(
         policy.time_step_spec,
@@ -72,6 +83,10 @@ class EpsilonGreedyPolicy(tf_policy.Base):
         observation_and_action_constraint_splitter=(
             observation_and_action_constraint_splitter),
         name=name)
+
+  @property
+  def wrapped_policy(self) -> tf_policy.TFPolicy:
+    return self._greedy_policy.wrapped_policy
 
   def _variables(self):
     return self._greedy_policy.variables()
@@ -101,13 +116,24 @@ class EpsilonGreedyPolicy(tf_policy.Base):
     if outer_ndims >= 2:
       raise ValueError(
           'Only supports batched time steps with a single batch dimension')
-    action = tf.compat.v1.where(cond, greedy_action.action,
-                                random_action.action)
+    action = tf.nest.map_structure(lambda g, r: tf.compat.v1.where(cond, g, r),
+                                   greedy_action.action, random_action.action)
 
     if greedy_action.info:
       if not random_action.info:
         raise ValueError('Incompatible info field')
       info = nest_utils.where(cond, greedy_action.info, random_action.info)
+      # Overwrite bandit policy info type.
+      if policy_utilities.has_bandit_policy_type(info, check_for_tensor=True):
+        # Generate mask of the same shape as bandit_policy_type (batch_size, 1).
+        # This is the opposite of `cond`, which is 1-D bool tensor (batch_size,)
+        # that is true when greedy policy was used, otherwise `cond` is false.
+        random_policy_mask = tf.reshape(tf.logical_not(cond),
+                                        tf.shape(info.bandit_policy_type))
+        bandit_policy_type = policy_utilities.bandit_policy_uniform_mask(
+            info.bandit_policy_type, mask=random_policy_mask)
+        info = policy_utilities.set_bandit_policy_type(
+            info, bandit_policy_type)
     else:
       if random_action.info:
         raise ValueError('Incompatible info field')

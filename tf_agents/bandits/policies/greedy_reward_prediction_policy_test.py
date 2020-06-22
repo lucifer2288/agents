@@ -20,10 +20,13 @@ from __future__ import print_function
 
 import collections
 import numpy as np
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 
+from tf_agents.bandits.agents import constraints
+from tf_agents.bandits.networks import global_and_arm_feature_network
 from tf_agents.bandits.networks import heteroscedastic_q_network
 from tf_agents.bandits.policies import greedy_reward_prediction_policy as greedy_reward_policy
+from tf_agents.bandits.specs import utils as bandit_spec_utils
 from tf_agents.networks import network
 from tf_agents.specs import array_spec
 from tf_agents.specs import tensor_spec
@@ -36,18 +39,21 @@ class DummyNet(network.Network):
 
   def __init__(self, observation_spec, num_actions=3):
     super(DummyNet, self).__init__(observation_spec, (), 'DummyNet')
-    self._layers.append(
+
+    # Store custom layers that can be serialized through the Checkpointable API.
+    self._dummy_layers = [
         tf.keras.layers.Dense(
             num_actions,
             kernel_initializer=tf.compat.v1.initializers.constant(
                 [[1, 1.5, 2], [1, 1.5, 4]]),
             bias_initializer=tf.compat.v1.initializers.constant(
-                [[1], [1], [-10]])))
+                [[1], [1], [-10]]))
+    ]
 
   def call(self, inputs, step_type=None, network_state=()):
     del step_type
     inputs = tf.cast(inputs, tf.float32)
-    for layer in self.layers:
+    for layer in self._dummy_layers:
       inputs = layer(inputs)
     return inputs, network_state
 
@@ -140,7 +146,7 @@ class GreedyRewardPredictionPolicyTest(test_utils.TestCase):
     with self.assertRaisesRegexp(
         ValueError,
         r'The number of actions \(11\) does not match the reward_network output'
-        r' size \(3.\)'):
+        r' size \(3\)\.'):
       policy.action(time_step, seed=1)
 
   def testAction(self):
@@ -282,6 +288,217 @@ class GreedyRewardPredictionPolicyTest(test_utils.TestCase):
     p_info = self.evaluate(action_step.info)
     self.assertAllClose(p_info.predicted_rewards_mean,
                         predicted_rewards_expected_array)
+
+  def testPerArmRewards(self):
+    tf.compat.v1.set_random_seed(3000)
+    obs_spec = bandit_spec_utils.create_per_arm_observation_spec(2, 3, 4)
+    time_step_spec = ts.time_step_spec(obs_spec)
+    action_spec = tensor_spec.BoundedTensorSpec((), tf.int32, 0, 3)
+    reward_network = (
+        global_and_arm_feature_network.create_feed_forward_common_tower_network(
+            obs_spec, (4, 3), (3, 4), (4, 2)))
+
+    policy = greedy_reward_policy.GreedyRewardPredictionPolicy(
+        time_step_spec,
+        action_spec,
+        reward_network=reward_network,
+        accepts_per_arm_features=True,
+        emit_policy_info=('predicted_rewards_mean',))
+    action_feature = tf.cast(
+        tf.reshape(tf.random.shuffle(tf.range(24)), shape=[2, 4, 3]),
+        dtype=tf.float32)
+    observations = {
+        bandit_spec_utils.GLOBAL_FEATURE_KEY:
+            tf.constant([[1, 2], [3, 4]], dtype=tf.float32),
+        bandit_spec_utils.PER_ARM_FEATURE_KEY: action_feature
+    }
+    time_step = ts.restart(observations, batch_size=2)
+    action_step = policy.action(time_step, seed=1)
+    self.assertEqual(action_step.action.shape.as_list(), [2])
+    self.assertEqual(action_step.action.dtype, tf.int32)
+    # Initialize all variables
+    self.evaluate(tf.compat.v1.global_variables_initializer())
+    action, p_info, first_arm_features = self.evaluate([
+        action_step.action, action_step.info,
+        observations[bandit_spec_utils.PER_ARM_FEATURE_KEY][0]
+    ])
+    self.assertAllEqual(action.shape, [2])
+    self.assertAllEqual(p_info.predicted_rewards_mean.shape, [2, 4])
+    self.assertAllEqual(p_info.chosen_arm_features.shape, [2, 3])
+    first_action = action[0]
+    self.assertAllEqual(p_info.chosen_arm_features[0],
+                        first_arm_features[first_action])
+
+    # Check that zeroing out some of the actions does not affect the predicted
+    # rewards for unchanged actions. This is to make sure that action feature
+    # padding does not influence the behavior.
+
+    if not tf.executing_eagerly():
+      # The below comparison will only work in tf2 because of the random per-arm
+      # observations get re-drawn in tf1.
+      return
+    padded_action_feature = tf.concat(
+        [action_feature[:, 0:1, :],
+         tf.zeros(shape=[2, 3, 3], dtype=tf.float32)],
+        axis=1)
+    observations = {
+        bandit_spec_utils.GLOBAL_FEATURE_KEY:
+            tf.constant([[1, 2], [3, 4]], dtype=tf.float32),
+        bandit_spec_utils.PER_ARM_FEATURE_KEY: padded_action_feature
+    }
+    time_step = ts.restart(observations, batch_size=2)
+    padded_action_step = policy.action(time_step, seed=1)
+    padded_p_info = self.evaluate(padded_action_step.info)
+    self.assertAllEqual(p_info.predicted_rewards_mean[:, 0],
+                        padded_p_info.predicted_rewards_mean[:, 0])
+
+  def testPerArmRewardsVariableNumActions(self):
+    tf.compat.v1.set_random_seed(3000)
+    obs_spec = bandit_spec_utils.create_per_arm_observation_spec(
+        2, 3, 4, add_num_actions_feature=True)
+    time_step_spec = ts.time_step_spec(obs_spec)
+    action_spec = tensor_spec.BoundedTensorSpec((), tf.int32, 0, 3)
+    reward_network = (
+        global_and_arm_feature_network.create_feed_forward_common_tower_network(
+            obs_spec, (4, 3), (3, 4), (4, 2)))
+
+    policy = greedy_reward_policy.GreedyRewardPredictionPolicy(
+        time_step_spec,
+        action_spec,
+        reward_network=reward_network,
+        accepts_per_arm_features=True,
+        emit_policy_info=('predicted_rewards_mean',))
+    action_feature = tf.cast(
+        tf.reshape(tf.random.shuffle(tf.range(24)), shape=[2, 4, 3]),
+        dtype=tf.float32)
+    observations = {
+        bandit_spec_utils.GLOBAL_FEATURE_KEY:
+            tf.constant([[1, 2], [3, 4]], dtype=tf.float32),
+        bandit_spec_utils.PER_ARM_FEATURE_KEY:
+            action_feature,
+        bandit_spec_utils.NUM_ACTIONS_FEATURE_KEY:
+            tf.constant([2, 3], dtype=tf.int32)
+    }
+    time_step = ts.restart(observations, batch_size=2)
+    action_step = policy.action(time_step, seed=1)
+    self.assertEqual(action_step.action.shape.as_list(), [2])
+    self.assertEqual(action_step.action.dtype, tf.int32)
+    # Initialize all variables
+    self.evaluate(tf.compat.v1.global_variables_initializer())
+    action, p_info, first_arm_features = self.evaluate([
+        action_step.action, action_step.info,
+        observations[bandit_spec_utils.PER_ARM_FEATURE_KEY][0]
+    ])
+    self.assertAllEqual(action.shape, [2])
+    self.assertAllEqual(p_info.predicted_rewards_mean.shape, [2, 4])
+    self.assertAllEqual(p_info.chosen_arm_features.shape, [2, 3])
+    first_action = action[0]
+    self.assertAllEqual(p_info.chosen_arm_features[0],
+                        first_arm_features[first_action])
+
+  def testPerArmRewardsSparseObs(self):
+    tf.compat.v1.set_random_seed(3000)
+    obs_spec = {
+        'global': {'sport': tensor_spec.TensorSpec((), tf.string)},
+        'per_arm': {
+            'name': tensor_spec.TensorSpec((3,), tf.string),
+            'fruit': tensor_spec.TensorSpec((3,), tf.string)
+        }
+    }
+    columns_a = tf.feature_column.indicator_column(
+        tf.feature_column.categorical_column_with_vocabulary_list(
+            'name', ['bob', 'george', 'wanda']))
+    columns_b = tf.feature_column.indicator_column(
+        tf.feature_column.categorical_column_with_vocabulary_list(
+            'fruit', ['banana', 'kiwi', 'pear']))
+    columns_c = tf.feature_column.indicator_column(
+        tf.feature_column.categorical_column_with_vocabulary_list(
+            'sport', ['bridge', 'chess', 'snooker']))
+
+    reward_network = (
+        global_and_arm_feature_network.create_feed_forward_common_tower_network(
+            observation_spec=obs_spec,
+            global_layers=(4, 3, 2),
+            arm_layers=(6, 5, 4),
+            common_layers=(7, 6, 5),
+            global_preprocessing_combiner=(
+                tf.compat.v2.keras.layers.DenseFeatures([columns_c])),
+            arm_preprocessing_combiner=tf.compat.v2.keras.layers.DenseFeatures(
+                [columns_a, columns_b])))
+
+    time_step_spec = ts.time_step_spec(obs_spec)
+    action_spec = tensor_spec.BoundedTensorSpec((), tf.int32, 0, 2)
+    policy = greedy_reward_policy.GreedyRewardPredictionPolicy(
+        time_step_spec,
+        action_spec,
+        reward_network=reward_network,
+        accepts_per_arm_features=True,
+        emit_policy_info=('predicted_rewards_mean',))
+    observations = {
+        'global': {
+            'sport': tf.constant(['snooker', 'chess'])
+        },
+        'per_arm': {
+            'name':
+                tf.constant([['george', 'george', 'george'],
+                             ['bob', 'bob', 'bob']]),
+            'fruit':
+                tf.constant([['banana', 'banana', 'banana'],
+                             ['kiwi', 'kiwi', 'kiwi']])
+        }
+    }
+
+    time_step = ts.restart(observations, batch_size=2)
+    action_step = policy.action(time_step, seed=1)
+    self.assertEqual(action_step.action.shape.as_list(), [2])
+    self.assertEqual(action_step.action.dtype, tf.int32)
+    # Initialize all variables
+    self.evaluate([
+        tf.compat.v1.global_variables_initializer(),
+        tf.compat.v1.tables_initializer()
+    ])
+    action, p_info, first_arm_name_feature = self.evaluate([
+        action_step.action, action_step.info,
+        observations[bandit_spec_utils.PER_ARM_FEATURE_KEY]['name'][0]
+    ])
+    self.assertAllEqual(action.shape, [2])
+    self.assertAllEqual(p_info.predicted_rewards_mean.shape, [2, 3])
+    self.assertAllEqual(p_info.chosen_arm_features['name'].shape, [2])
+    self.assertAllEqual(p_info.chosen_arm_features['fruit'].shape, [2])
+    first_action = action[0]
+    self.assertAllEqual(p_info.chosen_arm_features['name'][0],
+                        first_arm_name_feature[first_action])
+
+  def testPolicyWithConstraints(self):
+    constraint_net = DummyNet(self._obs_spec)
+    neural_constraint = constraints.NeuralConstraint(
+        self._time_step_spec,
+        self._action_spec,
+        constraint_network=constraint_net)
+
+    tf.compat.v1.set_random_seed(1)
+    policy = greedy_reward_policy.GreedyRewardPredictionPolicy(
+        self._time_step_spec,
+        self._action_spec,
+        reward_network=DummyNet(self._obs_spec),
+        constraints=[neural_constraint],
+        emit_policy_info=('predicted_rewards_mean',))
+    observations = tf.constant([[1, 2], [3, 4]], dtype=tf.float32)
+    time_step = ts.restart(observations, batch_size=2)
+    action_step = policy.action(time_step, seed=1)
+    self.assertEqual(action_step.action.shape.as_list(), [2])
+    self.assertEqual(action_step.action.dtype, tf.int32)
+    # Initialize all variables
+    self.evaluate(tf.compat.v1.global_variables_initializer())
+    self.assertAllEqual(self.evaluate(action_step.action), [1, 2])
+    # The expected values are obtained by passing the observation through the
+    # Keras dense layer of the DummyNet (defined above).
+    predicted_rewards_expected_array = np.array([[4.0, 5.5, 0.0],
+                                                 [8.0, 11.5, 12.0]])
+    p_info = self.evaluate(action_step.info)
+    self.assertAllClose(p_info.predicted_rewards_mean,
+                        predicted_rewards_expected_array)
+
 
 if __name__ == '__main__':
   tf.test.main()

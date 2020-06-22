@@ -19,7 +19,7 @@ from __future__ import division
 from __future__ import print_function
 
 import numpy as np
-import tensorflow as tf
+import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 from tf_agents.networks import network
 from tf_agents.networks import q_network
 from tf_agents.policies import q_policy
@@ -33,17 +33,20 @@ class DummyNet(network.Network):
   def __init__(self, name=None, num_actions=2):
     super(DummyNet, self).__init__(
         tensor_spec.TensorSpec([2], tf.float32), (), 'DummyNet')
-    self._layers.append(
+
+    # Store custom layers that can be serialized through the Checkpointable API.
+    self._dummy_layers = [
         tf.keras.layers.Dense(
             num_actions,
             kernel_initializer=tf.compat.v1.initializers.constant([[1, 1.5],
                                                                    [1, 1.5]]),
-            bias_initializer=tf.compat.v1.initializers.constant([[1], [1]])))
+            bias_initializer=tf.compat.v1.initializers.constant([[1], [1]]))
+    ]
 
   def call(self, inputs, step_type=None, network_state=()):
     del step_type
     inputs = tf.cast(inputs, tf.float32)
-    for layer in self.layers:
+    for layer in self._dummy_layers:
       inputs = layer(inputs)
     return inputs, network_state
 
@@ -162,26 +165,20 @@ class QPolicyTest(test_utils.TestCase):
         self._time_step_spec, self._action_spec, q_network=DummyNet())
     new_policy = q_policy.QPolicy(
         self._time_step_spec, self._action_spec, q_network=DummyNet())
+    self.assertEqual(len(policy.variables()), 2)
+    self.assertEqual(len(new_policy.variables()), 2)
 
     observations = tf.constant([[1, 2], [3, 4]], dtype=tf.float32)
     time_step = ts.restart(observations, batch_size=2)
 
-    action_step = policy.action(time_step, seed=1)
-    new_action_step = new_policy.action(time_step, seed=1)
-
-    self.assertEqual(len(policy.variables()), 2)
-    self.assertEqual(len(new_policy.variables()), 2)
-    self.assertEqual(action_step.action.shape, new_action_step.action.shape)
-    self.assertEqual(action_step.action.dtype, new_action_step.action.dtype)
-
     self.evaluate(tf.compat.v1.global_variables_initializer())
     self.assertEqual(self.evaluate(new_policy.update(policy)), None)
 
-    action = self.evaluate(action_step.action)
-    new_action = self.evaluate(new_action_step.action)
-    self.assertTrue(np.all(action >= 0) and np.all(action <= 1))
-    self.assertTrue(np.all(new_action >= 0) and np.all(new_action <= 1))
-    self.assertAllEqual(action, new_action)
+    distribution = policy.distribution(time_step).action.parameters
+    new_distribution = new_policy.distribution(time_step).action.parameters
+    self.assertAllEqual(
+        self.evaluate(distribution['logits']),
+        self.evaluate(new_distribution['logits']))
 
   def testActionSpecsCompatible(self):
     q_net = DummyNetWithActionSpec(self._action_spec)
