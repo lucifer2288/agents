@@ -13,9 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Keras Layers Module."""
+"""Module importing all multi_objective modules."""
 
-from tf_agents.keras_layers import bias_layer
-from tf_agents.keras_layers import dynamic_unroll_layer
-from tf_agents.keras_layers import rnn_wrapper
-from tf_agents.keras_layers import sequential_layer
+from tf_agents.bandits.multi_objective import multi_objective_scalarizer

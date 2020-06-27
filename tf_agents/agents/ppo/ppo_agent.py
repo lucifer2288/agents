@@ -791,12 +791,11 @@ class PPOAgent(tf_agent.TFAgent):
               training=True)
 
         grads = tape.gradient(loss_info.loss, variables_to_train)
+        if self._gradient_clipping > 0:
+          grads, _ = tf.clip_by_global_norm(grads, self._gradient_clipping)
 
         # Tuple is used for py3, where zip is a generator producing values once.
         grads_and_vars = tuple(zip(grads, variables_to_train))
-        if self._gradient_clipping > 0:
-          grads_and_vars = eager_utils.clip_gradient_norms(
-              grads_and_vars, self._gradient_clipping)
 
         # If summarize_gradients, create functions for summarizing both
         # gradients and variables.
@@ -922,23 +921,23 @@ class PPOAgent(tf_agent.TFAgent):
 
         # Regularize policy weights.
         policy_l2_losses = [
-            # TODO(b/158462888): Use aggregete losses that works with replicas.
-            tf.reduce_sum(input_tensor=tf.square(v)) * self._policy_l2_reg
-            for v in unshared_policy_vars_to_regularize
+            common.aggregate_losses(
+                regularization_loss=tf.square(v)).regularization *
+            self._policy_l2_reg for v in unshared_policy_vars_to_regularize
         ]
 
         # Regularize value function weights.
         vf_l2_losses = [
-            # TODO(b/158462888): Use aggregete losses that works with replicas.
-            tf.reduce_sum(input_tensor=tf.square(v)) *
+            common.aggregate_losses(
+                regularization_loss=tf.square(v)).regularization *
             self._value_function_l2_reg for v in unshared_vf_vars_to_regularize
         ]
 
         # Regularize shared weights
         shared_l2_losses = [
-            # TODO(b/158462888): Use aggregete losses that works with replicas.
-            tf.reduce_sum(input_tensor=tf.square(v)) * self._shared_vars_l2_reg
-            for v in shared_vars_to_regularize
+            common.aggregate_losses(
+                regularization_loss=tf.square(v)).regularization *
+            self._shared_vars_l2_reg for v in shared_vars_to_regularize
         ]
 
         l2_losses = policy_l2_losses + vf_l2_losses + shared_l2_losses
