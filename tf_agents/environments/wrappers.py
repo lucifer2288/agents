@@ -39,6 +39,7 @@ from tf_agents.specs import array_spec
 from tf_agents.specs import tensor_spec
 from tf_agents.trajectories import time_step as ts
 from tf_agents.typing import types
+from tf_agents.utils import nest_utils
 
 from tensorflow.python.util import nest  # pylint:disable=g-direct-tensorflow-import  # TF internal
 
@@ -385,7 +386,9 @@ class ActionDiscretizeWrapper(PyEnvironmentBaseWrapper):
     limits = np.asarray(limits)
     # Simplify shape of bounds if they are all equal.
     if np.all(limits == limits.flat[0]):
-      limits = limits.flat[0]
+      discrete_spec_max_limit = limits.flat[0]
+    else:
+      discrete_spec_max_limit = limits
     # Workaround for b/148086610. Makes the discretized wrapper generate a
     # scalar spec when possible.
     shape = () if spec.shape == (1,) else spec.shape
@@ -393,7 +396,7 @@ class ActionDiscretizeWrapper(PyEnvironmentBaseWrapper):
         shape=shape,
         dtype=np.int32,
         minimum=0,
-        maximum=limits - 1,
+        maximum=discrete_spec_max_limit - 1,
         name=spec.name)
 
     minimum = np.broadcast_to(spec.minimum, shape)
@@ -848,11 +851,13 @@ class HistoryWrapper(PyEnvironmentBaseWrapper):
 
     if self._include_actions:
       observation = {
-          'observation': np.stack(self._observation_history),
-          'action': np.stack(self._action_history)
+          'observation':
+              nest_utils.stack_nested_arrays(self._observation_history),
+          'action':
+              nest_utils.stack_nested_arrays(self._action_history)
       }
     else:
-      observation = np.stack(self._observation_history)
+      observation = nest_utils.stack_nested_arrays(self._observation_history)
     return time_step._replace(observation=observation)
 
   def _reset(self):

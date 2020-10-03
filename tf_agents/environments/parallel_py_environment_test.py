@@ -102,6 +102,16 @@ class ParallelPyEnvironmentTest(tf.test.TestCase):
                         time_step2.observation.shape)
     env.close()
 
+  def test_checks_constructors(self):
+    self._set_default_specs()
+    # pytype: disable=wrong-arg-types
+    with self.assertRaisesRegex(TypeError, '.*non-callable.*'):
+      parallel_py_environment.ParallelPyEnvironment([
+          random_py_environment.RandomPyEnvironment(self.observation_spec,
+                                                    self.action_spec)
+      ])
+    # pytype: enable=wrong-arg-types
+
   def test_non_blocking_start_processes_in_parallel(self):
     self._set_default_specs()
     constructor = functools.partial(
@@ -116,7 +126,7 @@ class ParallelPyEnvironmentTest(tf.test.TestCase):
     end_time = time.time()
     self.assertLessEqual(
         end_time - start_time,
-        5.0,
+        10.0,
         msg=('Expected all processes to start together, '
              'got {} wait time').format(end_time - start_time))
     env.close()
@@ -191,6 +201,15 @@ class ParallelPyEnvironmentTest(tf.test.TestCase):
         np.random.RandomState(1).get_state()[1][-1],
         env._envs[1].access('_rng').get_state()[1][-1])
     env.close()
+
+  def test_render(self):
+    num_envs = 2
+    env = self._make_parallel_py_environment(num_envs=num_envs)
+    img = env.render('rgb_array')
+    self.assertEqual(img.shape, (num_envs, 2, 2, 3))
+    self.assertEqual(img.dtype, np.uint8)
+    with self.assertRaisesRegex(NotImplementedError, 'Only rgb_array'):
+      self.evaluate(env.render('human'))
 
 
 class ProcessPyEnvironmentTest(tf.test.TestCase):

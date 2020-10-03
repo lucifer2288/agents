@@ -30,7 +30,7 @@ class TimeStepTest(tf.test.TestCase):
 
   def testRestart(self):
     observation = -1
-    time_step = ts.restart(observation)
+    time_step = ts.restart(observation)  # pytype: disable=wrong-arg-types
 
     self.assertEqual(ts.StepType.FIRST, time_step.step_type)
     self.assertEqual(-1, time_step.observation)
@@ -41,7 +41,7 @@ class TimeStepTest(tf.test.TestCase):
     observation = -1
     reward = 2.0
     discount = 1.0
-    time_step = ts.transition(observation, reward, discount)
+    time_step = ts.transition(observation, reward, discount)  # pytype: disable=wrong-arg-types
 
     self.assertEqual(ts.StepType.MID, time_step.step_type)
     self.assertEqual(-1, time_step.observation)
@@ -51,7 +51,7 @@ class TimeStepTest(tf.test.TestCase):
   def testTermination(self):
     observation = -1
     reward = 2.0
-    time_step = ts.termination(observation, reward)
+    time_step = ts.termination(observation, reward)  # pytype: disable=wrong-arg-types
 
     self.assertEqual(ts.StepType.LAST, time_step.step_type)
     self.assertEqual(-1, time_step.observation)
@@ -62,7 +62,7 @@ class TimeStepTest(tf.test.TestCase):
     observation = -1
     reward = 2.0
     discount = 1.0
-    time_step = ts.truncation(observation, reward, discount)
+    time_step = ts.truncation(observation, reward, discount)  # pytype: disable=wrong-arg-types
 
     self.assertEqual(ts.StepType.LAST, time_step.step_type)
     self.assertEqual(-1, time_step.observation)
@@ -71,19 +71,19 @@ class TimeStepTest(tf.test.TestCase):
 
   def testRestartIsFirst(self):
     observation = -1
-    time_step = ts.restart(observation)
+    time_step = ts.restart(observation)  # pytype: disable=wrong-arg-types
     self.assertTrue(time_step.is_first())
 
   def testTransitionIsMid(self):
     observation = -1
     reward = 2.0
-    time_step = ts.transition(observation, reward)
+    time_step = ts.transition(observation, reward)  # pytype: disable=wrong-arg-types
     self.assertTrue(time_step.is_mid())
 
   def testTerminationIsLast(self):
     observation = -1
     reward = 2.0
-    time_step = ts.termination(observation, reward)
+    time_step = ts.termination(observation, reward)  # pytype: disable=wrong-arg-types
     self.assertTrue(time_step.is_last())
 
   def testLastNumpy(self):
@@ -275,7 +275,8 @@ class TFTimeStepTest(tf.test.TestCase):
     observation = tf.constant(-1)
     reward_spec = [tensor_spec.TensorSpec((1,), tf.float32, 'r1'),
                    tensor_spec.TensorSpec((2,), tf.float32, 'r2')]
-    time_step = ts.restart(observation, batch_size=2, reward_spec=reward_spec)
+    time_step = ts.restart(observation, batch_size=tf.constant(2, shape=[1]),
+                           reward_spec=reward_spec)
     time_step_ = self.evaluate(time_step)
 
     expected_reward = [np.array([[0.], [0.]], dtype=np.float32),
@@ -403,7 +404,7 @@ class TFTimeStepTest(tf.test.TestCase):
     observation = (1, 2)
     reward = (None, None)
     with self.assertRaises(ValueError):
-      ts.transition(observation, reward)
+      ts.transition(observation, reward)  # pytype: disable=wrong-arg-types
 
 
 class TFTimeStepSpecTest(tf.test.TestCase):

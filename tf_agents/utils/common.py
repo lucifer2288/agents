@@ -21,12 +21,12 @@ from __future__ import print_function
 
 import collections as cs
 import contextlib
+import distutils.version
 import functools
 import importlib
 import os
 
 from absl import logging
-import distutils.version
 
 import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 
@@ -212,7 +212,7 @@ def create_variable(name,
         initial_value = tf.convert_to_tensor(initial_value, dtype=dtype)
     else:
       if callable(initializer):
-        initial_value = lambda: initializer(shape)
+        initial_value = lambda: initializer(shape, dtype)
       else:
         initial_value = initializer
     return tf.compat.v2.Variable(
@@ -243,6 +243,11 @@ def soft_variables_update(source_variables,
                           sort_variables_by_name=False):
   """Performs a soft/hard update of variables from the source to the target.
 
+  Note: **when using this function with TF DistributionStrategy**, the
+  `strategy.extended.update` call (below) needs to be done in a cross-replica
+  context, i.e. inside a merge_call. Please use the Periodically class above
+  that provides this wrapper for you.
+
   For each variable v_t in target variables and its corresponding variable v_s
   in source variables, a soft update is:
   v_t = (1 - tau) * v_t + tau * v_s
@@ -262,9 +267,12 @@ def soft_variables_update(source_variables,
 
   Returns:
     An operation that updates target variables from source variables.
+
   Raises:
     ValueError: if `tau not in [0, 1]`.
     ValueError: if `len(source_variables) != len(target_variables)`.
+    ValueError: "Method requires being in cross-replica context,
+      use get_replica_context().merge_call()" if used inside replica context.
   """
   if tau < 0 or tau > 1:
     raise ValueError('Input `tau` should be in [0, 1].')
@@ -1211,11 +1219,10 @@ def check_no_shared_variables(network_1, network_2):
     ValueError: if one of the networks has not yet been built
       (e.g. user must call `create_variables`).
   """
-  variables_1 = {id(v): v for v in network_1.trainable_variables}
-  variables_2 = {id(v): v for v in network_2.trainable_variables}
-  shared = set(variables_1.keys()) & set(variables_2.keys())
-  if shared:
-    shared_variables = [variables_1[v] for v in shared]
+  variables_1 = object_identity.ObjectIdentitySet(network_1.trainable_variables)
+  variables_2 = object_identity.ObjectIdentitySet(network_2.trainable_variables)
+  shared_variables = variables_1 & variables_2
+  if shared_variables:
     raise ValueError(
         'After making a copy of network \'{}\' to create a target '
         'network \'{}\', the target network shares weights with '
@@ -1227,7 +1234,9 @@ def check_no_shared_variables(network_1, network_2):
         'share weights make sure all the weights are created inside the Network'
         ' since a copy will be created by creating a new Network with the same '
         'args but a new name. Shared variables found: '
-        '\'{}\'.'.format(network_1.name, network_2.name, shared_variables))
+        '\'{}\'.'.format(
+            network_1.name, network_2.name,
+            [x.name for x in shared_variables]))
 
 
 def check_matching_networks(network_1, network_2):
@@ -1259,11 +1268,12 @@ def check_matching_networks(network_1, network_2):
 
 
 def maybe_copy_target_network_with_checks(network, target_network=None,
-                                          name='TargetNetwork'):
+                                          name=None,
+                                          input_spec=None):
   """Copies the network into target if None and checks for shared variables."""
   if target_network is None:
     target_network = network.copy(name=name)
-    target_network.create_variables()
+    target_network.create_variables(input_spec)
   # Copy may have been shallow, and variables may inadvertently be shared
   # between the target and the original networks. This would be an unusual
   # setup, so we throw an error to protect users from accidentally doing so.
@@ -1293,7 +1303,8 @@ def aggregate_losses(per_example_loss=None,
 
   Args:
     per_example_loss: Per-example loss [B] or [B, T, ...].
-    sample_weight: Optional weighting for each example [B] or [B, T, ...].
+    sample_weight: Optional weighting for each example, Tensor shaped [B] or
+      [B, T, ...], or a scalar float.
     global_batch_size: Optional global batch size value. Defaults to (size of
     first dimension of `losses`) * (number of replicas).
     regularization_loss: Regularization loss.
@@ -1302,12 +1313,21 @@ def aggregate_losses(per_example_loss=None,
     An AggregatedLosses named tuple with scalar losses to optimize.
   """
   total_loss, weighted_loss, reg_loss = None, None, None
+  if sample_weight is not None and not isinstance(sample_weight, tf.Tensor):
+    sample_weight = tf.convert_to_tensor(sample_weight, dtype=tf.float32)
+
   # Compute loss that is scaled by global batch size.
   if per_example_loss is not None:
+    loss_rank = per_example_loss.shape.rank
     if sample_weight is not None:
+      weight_rank = sample_weight.shape.rank
+      # Expand `sample_weight` to be broadcastable to the shape of
+      # `per_example_loss`, to ensure that multiplication works properly.
+      if weight_rank > 0 and loss_rank > weight_rank:
+        for dim in range(weight_rank, loss_rank):
+          sample_weight = tf.expand_dims(sample_weight, dim)
       per_example_loss = tf.math.multiply(per_example_loss, sample_weight)
 
-    loss_rank = per_example_loss.shape.rank
     if loss_rank is not None and loss_rank == 0:
       err_msg = (
           'Need to use a loss function that computes losses per sample, ex: '
@@ -1379,3 +1399,11 @@ def deduped_network_variables(network, *args):
   other_vars = object_identity.ObjectIdentitySet(
       [v for n in args for v in n.variables])  # pylint:disable=g-complex-comprehension
   return [v for v in network.variables if v not in other_vars]
+
+
+def safe_has_state(state):
+  """Safely checks `state not in (None, (), [])`."""
+  # TODO(b/158804957): tf.function changes "s in ((),)" to a tensor bool expr.
+  # pylint: disable=literal-comparison
+  return state is not None and state is not () and state is not []
+  # pylint: enable=literal-comparison

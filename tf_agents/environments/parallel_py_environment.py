@@ -77,6 +77,11 @@ class ParallelPyEnvironment(py_environment.PyEnvironment):
       ValueError: If the action or observation specs don't match.
     """
     super(ParallelPyEnvironment, self).__init__()
+    if any([not callable(ctor) for ctor in env_constructors]):
+      raise TypeError(
+          'Found non-callable `env_constructors` in `ParallelPyEnvironment` '
+          '__init__ call. Did you accidentally pass in environment instances '
+          'instead of constructors? Got: {}'.format(env_constructors))
     self._envs = [ProcessPyEnvironment(ctor, flatten=flatten)
                   for ctor in env_constructors]
     self._num_envs = len(env_constructors)
@@ -192,6 +197,28 @@ class ParallelPyEnvironment(py_environment.PyEnvironment):
     promises = [env.call('seed', seed) for seed, env in zip(seeds, self._envs)]
     # Block until all envs are seeded.
     return [promise() for promise in promises]
+
+  def render(self, mode: Text = 'rgb_array') -> types.NestedArray:
+    """Renders the environment.
+
+    Args:
+      mode: Rendering mode. Currently only 'rgb_array' is supported because
+        this is a batched environment.
+
+    Returns:
+      An ndarray of shape [batch_size, width, height, 3] denoting RGB images
+      (for mode=`rgb_array`).
+    Raises:
+      NotImplementedError: If the environment does not support rendering,
+        or any other mode than `rgb_array` is given.
+    """
+    if mode != 'rgb_array':
+      raise NotImplementedError('Only rgb_array rendering mode is supported. '
+                                'Got %s' % mode)
+    imgs = [env.render(mode, blocking=self._blocking) for env in self._envs]
+    if not self._blocking:
+      imgs = [promise() for promise in imgs]
+    return nest_utils.stack_nested_arrays(imgs)
 
 
 class ProcessPyEnvironment(object):
@@ -369,6 +396,31 @@ class ProcessPyEnvironment(object):
       observation.
     """
     promise = self.call('reset')
+    if blocking:
+      return promise()
+    else:
+      return promise
+
+  def render(self,
+             mode: Text = 'rgb_array',
+             blocking: bool = True) -> Union[types.NestedArray, Promise]:
+    """Renders the environment.
+
+    Args:
+      mode: Rendering mode. Only 'rgb_array' is supported.
+      blocking: Whether to wait for the result.
+
+    Returns:
+      An ndarray of shape [width, height, 3] denoting an RGB image when
+      blocking. Otherwise, callable that returns the rendered image.
+    Raises:
+      NotImplementedError: If the environment does not support rendering,
+        or any other modes than `rgb_array` is given.
+    """
+    if mode != 'rgb_array':
+      raise NotImplementedError('Only rgb_array rendering mode is supported. '
+                                'Got %s' % mode)
+    promise = self.call('render')
     if blocking:
       return promise()
     else:

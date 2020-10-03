@@ -22,10 +22,10 @@ from __future__ import print_function
 import copy
 import functools
 import os
-from typing import Callable, Dict, Tuple, Optional, Text
+from typing import Callable, Dict, Tuple, Optional, Text, cast
 
 from absl import logging
-import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
+import tensorflow as tf
 import tensorflow_probability as tfp
 
 from tf_agents.policies import tf_policy
@@ -251,6 +251,7 @@ class PolicySaver(object):
     if seed is not None:
 
       def action_fn(time_step, policy_state):
+        time_step = cast(ts.TimeStep, time_step)
         return original_action_fn(time_step, policy_state, seed=seed)
     else:
       action_fn = original_action_fn
@@ -258,6 +259,7 @@ class PolicySaver(object):
     def distribution_fn(time_step, policy_state):
       """Wrapper for policy.distribution() in the SavedModel."""
       try:
+        time_step = cast(ts.TimeStep, time_step)
         outs = policy.distribution(
             time_step=time_step, policy_state=policy_state)
         return tf.nest.map_structure(_composite_distribution, outs)
@@ -292,6 +294,7 @@ class PolicySaver(object):
 
     batched_time_step_spec = tf.nest.map_structure(add_batch_dim,
                                                    policy.time_step_spec)
+    batched_time_step_spec = cast(ts.TimeStep, batched_time_step_spec)
     batched_policy_state_spec = tf.nest.map_structure(add_batch_dim,
                                                       policy.policy_state_spec)
 

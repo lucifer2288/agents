@@ -24,19 +24,24 @@ Implementation based on
 
 from __future__ import absolute_import
 from __future__ import division
+# Using Type Annotations.
 from __future__ import print_function
+
+from typing import Optional, Text
 
 import gin
 import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 
 from tf_agents.agents import tf_agent
-from tf_agents.bandits.agents import utils as bandit_utils
 from tf_agents.bandits.policies import categorical_policy
+from tf_agents.bandits.policies import policy_utilities
 from tf_agents.trajectories import policy_step
+from tf_agents.typing import types
 from tf_agents.utils import common
 
 
-def selective_sum(values, partitions, num_partitions):
+def selective_sum(values: types.Tensor, partitions: types.Int,
+                  num_partitions: int) -> types.Tensor:
   """Sums entries in `values`, partitioned using `partitions`.
 
   For example,
@@ -63,7 +68,8 @@ def selective_sum(values, partitions, num_partitions):
                    for partition in partitioned_values])
 
 
-def exp3_update_value(reward, log_prob):
+def exp3_update_value(reward: types.Float,
+                      log_prob: types.Float) -> types.Float:
   return 1. - (1. - reward) / tf.exp(log_prob)
 
 
@@ -79,10 +85,10 @@ class Exp3Agent(tf_agent.TFAgent):
   """
 
   def __init__(self,
-               time_step_spec,
-               action_spec,
-               learning_rate,
-               name=None):
+               time_step_spec: types.TimeStep,
+               action_spec: types.BoundedTensorSpec,
+               learning_rate: float,
+               name: Optional[Text] = None):
     """Initialize an instance of `Exp3Agent`.
 
     Args:
@@ -97,7 +103,7 @@ class Exp3Agent(tf_agent.TFAgent):
     """
     tf.Module.__init__(self, name=name)
     common.tf_agents_gauge.get_cell('TFABandit').set(True)
-    self._num_actions = bandit_utils.get_num_actions_from_tensor_spec(
+    self._num_actions = policy_utilities.get_num_actions_from_tensor_spec(
         action_spec)
     self._weights = tf.compat.v2.Variable(
         tf.zeros(self._num_actions), name='weights')

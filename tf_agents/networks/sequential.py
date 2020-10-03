@@ -41,7 +41,7 @@ def _infer_state_specs(
     `state_spec`, a tuple of the state specs of length `len(layers)`.
   """
   state_specs = tuple(network.get_state_spec(layer) for layer in layers)
-  return state_specs
+  return state_specs  # pytype: disable=bad-return-type
 
 
 class Sequential(network.Network):
@@ -77,7 +77,7 @@ class Sequential(network.Network):
         are subclasses of `tf.keras.layers.{RNN,LSTM,GRU,...}` are
         wrapped in `tf_agents.keras_layers.RNNWrapper`.
       input_spec: (Optional.) A nest of `tf.TypeSpec` representing the
-        input observations.
+        input observations to the first layer.
       name: (Optional.) Network name.
 
     Raises:
@@ -142,7 +142,7 @@ class Sequential(network.Network):
       A deep copy of this network.
     """
     new_kwargs = dict(self._saved_kwargs, **kwargs)
-    if 'layers' not in new_kwargs:
+    if 'layers' not in kwargs:
       new_layers = [copy.deepcopy(l) for l in self.layers]
       new_kwargs['layers'] = new_layers
     return type(self)(**new_kwargs)

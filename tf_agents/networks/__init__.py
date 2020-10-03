@@ -21,10 +21,17 @@ from tf_agents.networks import categorical_projection_network
 from tf_agents.networks import encoding_network
 from tf_agents.networks import expand_dims_layer
 from tf_agents.networks import lstm_encoding_network
+from tf_agents.networks import nest_map
 from tf_agents.networks import network
 from tf_agents.networks import normal_projection_network
 from tf_agents.networks import q_network
 from tf_agents.networks import q_rnn_network
+from tf_agents.networks import sequential
 from tf_agents.networks import utils
 from tf_agents.networks import value_network
 from tf_agents.networks import value_rnn_network
+
+from tf_agents.networks.nest_map import NestFlatten
+from tf_agents.networks.nest_map import NestMap
+from tf_agents.networks.network import Network
+from tf_agents.networks.sequential import Sequential

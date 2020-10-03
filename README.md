@@ -1,9 +1,11 @@
-# TF-Agents: A reliable, scalable and easy to use Reinforcement Learning library for TensorFlow.
+# TF-Agents: A reliable, scalable and easy to use TensorFlow library for Contextual Bandits and Reinforcement Learning.
 
-[TF-Agents](https://github.com/tensorflow/agents) makes designing, implementing
-and testing new RL algorithms easier, by providing well tested modular
-components that can be modified and extended. It enables fast code iteration,
-with good test integration and benchmarking.
+[![PyPI tf-agents](https://badge.fury.io/py/tf-agents.svg)](https://badge.fury.io/py/tf-agents)
+
+[TF-Agents](https://github.com/tensorflow/agents) makes implementing, deploying,
+and testing new Bandits and RL algorithms easier. It provides well tested and
+modular components that can be modified and extended. It enables fast code
+iteration, with good test integration and benchmarking.
 
 To get started, we recommend checking out one of our Colab tutorials. If you
 need an intro to RL (or a quick recap),
@@ -12,9 +14,6 @@ need an intro to RL (or a quick recap),
 running in the Cartpole environment. API documentation for the current stable
 release is on
 [tensorflow.org](https://www.tensorflow.org/agents/api_docs/python/tf_agents).
-
-**NOTE:** 0.5.0 is now available and was tested with Python3 and TensorFlow 2.2.
-`pip install --upgrade tf-agents`.
 
 TF-Agents is under active development and interfaces may change at any time.
 Feedback and comments are welcome.
@@ -67,11 +66,11 @@ provided.
 
 ## Multi-Armed Bandits
 
-The TF-Agents library contains also a Multi-Armed Bandits suite with a few
-environments and agents. RL agents can also be used on Bandit environments. For
-a tutorial, see
+The TF-Agents library contains also a comprehensive Multi-Armed Bandits suite,
+including Bandits environments and agents. RL agents can also be used on Bandit
+environments. For a tutorial, see
 [`tf_agents/bandits/colabs/bandits_tutorial.ipynb`](https://github.com/tensorflow/agents/tree/master/tf_agents/bandits/colabs/bandits_tutorial.ipynb).
-For examples ready to run, see
+For ready-to-run examples, see
 [`tf_agents/bandits/agents/examples/`](https://github.com/tensorflow/agents/tree/master/tf_agents/bandits/agents/examples/).
 
 <a id='Examples'></a>
@@ -82,7 +81,7 @@ End-to-end examples training agents can be found under each agent directory.
 e.g.:
 
 *   DQN:
-    [`tf_agents/agents/dqn/examples/v1/train_eval_gym.py`](https://github.com/tensorflow/agents/tree/master/tf_agents/agents/dqn/examples/v1/train_eval_gym.py)
+    [`tf_agents/agents/dqn/examples/v2/train_eval.py`](https://github.com/tensorflow/agents/tree/master/tf_agents/agents/dqn/examples/v2/train_eval.py)
 
 <a id='Installation'></a>
 
@@ -95,28 +94,35 @@ GitHub clone.
 
 ### Stable
 
-Run the commands below to install the most recent stable release (0.5.0), which
-was tested with TensorFlow 2.2.x and and Python3. API documentation for the
-release is on
+Run the commands below to install the most recent stable release. API
+documentation for the release is on
 [tensorflow.org](https://www.tensorflow.org/agents/api_docs/python/tf_agents).
 
-```bash
-pip install --user tf-agents
-pip install --user tensorflow==2.2.0
+```shell
+$ pip install --user tf-agents[reverb]
 
-# To get the matching examples and colabs
-git clone https://github.com/tensorflow/agents.git
-cd agents
-git checkout v0.5.0
+# Use this tag get the matching examples and colabs.
+$ git clone https://github.com/tensorflow/agents.git
+$ cd agents
+$ git checkout v0.6.0
+```
 
+If you want to install TF-Agents with versions of Tensorflow or
+[Reverb](https://github.com/deepmind/reverb) that are flagged as not compatible
+by the pip dependency check, use the following pattern below at your own risk.
+
+```shell
+$ pip install --user tensorflow
+$ pip install --user dm-reverb
+$ pip install --user tf-agents
 ```
 
 If you want to use TF-Agents with TensorFlow 1.15 or 2.0, install version 0.3.0:
 
-```bash
-pip install tf-agents==0.3.0
+```shell
 # Newer versions of tensorflow-probability require newer versions of TensorFlow.
-pip install tensorflow-probability==0.8.0
+$ pip install tensorflow-probability==0.8.0
+$ pip install tf-agents==0.3.0
 ```
 
 ### Nightly
@@ -124,18 +130,19 @@ pip install tensorflow-probability==0.8.0
 Nightly builds include newer features, but may be less stable than the versioned
 releases. The nightly build is pushed as `tf-agents-nightly`. We suggest
 installing nightly versions of TensorFlow (`tf-nightly`) and TensorFlow
-Probability (`tfp-nightly`) as those are the version TF-Agents nightly are
-tested against. Nightly releases are only compatible with Python 3 as of
-17-JAN-2020.
+Probability (`tfp-nightly`) as those are the versions TF-Agents nightly are
+tested against.
 
 To install the nightly build version, run the following:
 
 ```shell
+# `--force-reinstall helps guarantee the right versions.
+$ pip install --user --force-reinstall tf-nightly
+$ pip install --user --force-reinstall tfp-nightly
+$ pip install --user --force-reinstall dm-reverb-nightly
+
 # Installing with the `--upgrade` flag ensures you'll get the latest version.
-pip install --user --upgrade tf-agents-nightly  # depends on tf-nightly
-# `--force-reinstall helps guarantee the right version.
-pip install --user --force-reinstall tf-nightly
-pip install --user --force-reinstall tfp-nightly
+$ pip install --user --upgrade tf-agents-nightly
 ```
 
 ### From GitHub
@@ -166,24 +173,10 @@ last release compatible with Python 2.
 Release | Branch / Tag                                               | TensorFlow Version
 ------- | ---------------------------------------------------------- | ------------------
 Nightly | [master](https://github.com/tensorflow/agents)             | tf-nightly
+0.6.0   | [v0.6.0](https://github.com/tensorflow/agents/tree/v0.6.0) | 2.3.0
 0.5.0   | [v0.5.0](https://github.com/tensorflow/agents/tree/v0.5.0) | 2.2.0
 0.4.0   | [v0.4.0](https://github.com/tensorflow/agents/tree/v0.4.0) | 2.1.0
 0.3.0   | [v0.3.0](https://github.com/tensorflow/agents/tree/v0.3.0) | 1.15.0 and 2.0.0
-
-Examples of installing nightly, most recent stable, and a specific version of
-TF-Agents:
-
-```bash
-# Stable
-pip install tf-agents
-
-# Nightly
-pip install tf-agents-nightly
-
-# Specific version
-pip install tf-agents==0.4.0
-
-```
 
 <a id='Principles'></a>
 
@@ -202,10 +195,11 @@ If you use this code, please cite it as:
 ```
 @misc{TFAgents,
   title = {{TF-Agents}: A library for Reinforcement Learning in TensorFlow},
-  author = "{Sergio Guadarrama, Anoop Korattikara, Oscar Ramirez,
-    Pablo Castro, Ethan Holly, Sam Fishman, Ke Wang, Ekaterina Gonina, Neal Wu,
-    Efi Kokiopoulou, Luciano Sbaiz, Jamie Smith, Gábor Bartók, Jesse Berent,
-    Chris Harris, Vincent Vanhoucke, Eugene Brevdo}",
+  author = "{Sergio Guadarrama and Anoop Korattikara and Oscar Ramirez and
+     Pablo Castro and Ethan Holly and Sam Fishman and Ke Wang and
+     Ekaterina Gonina and Neal Wu and Efi Kokiopoulou and Luciano Sbaiz and
+     Jamie Smith and Gábor Bartók and Jesse Berent and Chris Harris and
+     Vincent Vanhoucke and Eugene Brevdo}",
   howpublished = {\url{https://github.com/tensorflow/agents}},
   url = "https://github.com/tensorflow/agents",
   year = 2018,

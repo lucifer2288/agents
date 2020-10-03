@@ -22,7 +22,8 @@ from __future__ import print_function
 
 from typing import Sequence
 
-import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
+import tensorflow as tf
+import tensorflow_probability as tfp
 from tf_agents.trajectories import policy_step
 from tf_agents.trajectories import time_step as ts
 from tf_agents.trajectories import trajectory
@@ -51,7 +52,7 @@ def make_trajectory_mask(batched_traj: trajectory.Trajectory) -> types.Tensor:
   # advantages.
   valid_return_value = ~(
       tf.equal(batched_traj.policy_info['return'], 0)
-      & tf.equal(batched_traj.policy_info['normalized_advantage'], 0))
+      & tf.equal(batched_traj.policy_info['advantage'], 0))
 
   return tf.cast(not_between_episodes & valid_return_value, tf.float32)
 
@@ -104,11 +105,21 @@ def get_distribution_params(
       distribution, with keys as parameter name and values as tensors containing
       parameter values.
   """
-  def _tensor_parameters_only(params):
-    return {k: params[k] for k in params if isinstance(params[k], tf.Tensor)}
+  def _maybe_scale(d, k):
+    # For backwards compatibility with old DistributionNetworks, we rewrite
+    # the 'scale_diag' of MVNDiag to 'scale'.
+    if (isinstance(d, tfp.distributions.MultivariateNormalDiag)
+        and k == 'scale_diag'):
+      return 'scale'
+    else:
+      return k
+
+  def _tensor_parameters_only(d, params):
+    return {_maybe_scale(d, k): params[k]
+            for k in params if isinstance(params[k], tf.Tensor)}
 
   return tf.nest.map_structure(
-      lambda single_dist: _tensor_parameters_only(single_dist.parameters),
+      lambda d: _tensor_parameters_only(d, d.parameters),
       nested_distribution)
 
 
@@ -126,14 +137,17 @@ def nested_kl_divergence(nested_from_distribution: types.NestedDistribution,
                         for from_dist, to_dist
                         in zip(flat_from_distribution, flat_to_distribution)]
 
-  # Sum the kl of the leaves.
-  summed_kl_divergences = tf.add_n(all_kl_divergences)
+  all_kl_divergences_reduced = []
+  for kl_divergence in all_kl_divergences:
+    # Reduce_sum over non-batch dimensions.
+    reduce_dims = list(range(len(kl_divergence.shape)))
+    for dim in outer_dims:
+      reduce_dims.remove(dim)
+    all_kl_divergences_reduced.append(
+        tf.reduce_sum(input_tensor=kl_divergence, axis=reduce_dims))
 
-  # Reduce_sum over non-batch dimensions.
-  reduce_dims = list(range(len(summed_kl_divergences.shape)))
-  for dim in outer_dims:
-    reduce_dims.remove(dim)
-  total_kl = tf.reduce_sum(input_tensor=summed_kl_divergences, axis=reduce_dims)
+  # Sum the kl of the leaves.
+  total_kl = tf.add_n(all_kl_divergences_reduced)
 
   return total_kl
 

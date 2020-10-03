@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for tf_agents.keras_layers.sequential_layer."""
+"""Tests for tf_agents.networks.sequential."""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -26,8 +26,11 @@ from absl import flags
 
 import numpy as np
 import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
+import tensorflow_probability as tfp
 
+from tf_agents.distributions import utils as distribution_utils
 from tf_agents.keras_layers import dynamic_unroll_layer
+from tf_agents.keras_layers import inner_reshape
 from tf_agents.networks import network
 from tf_agents.networks import sequential as sequential_lib
 from tf_agents.policies import actor_policy
@@ -38,6 +41,8 @@ from tf_agents.utils import common
 from tf_agents.utils import test_utils
 
 FLAGS = flags.FLAGS
+
+tfd = tfp.distributions
 
 
 class ActorNetwork(network.Network):
@@ -50,7 +55,7 @@ class ActorNetwork(network.Network):
             tf.keras.layers.Dense(10),
             tf.keras.layers.Dense(num_actions)
         ],
-        input_spec=input_tensor_spec)
+        input_spec=input_tensor_spec)  # pytype: disable=wrong-arg-types
     super(ActorNetwork, self).__init__(
         input_tensor_spec=input_tensor_spec,
         state_spec=self._sequential.state_spec,
@@ -71,7 +76,7 @@ class SequentialTest(test_utils.TestCase):
     sequential = sequential_lib.Sequential(
         [tf.keras.layers.Dense(4, use_bias=False),
          tf.keras.layers.ReLU()],
-        input_spec=tf.TensorSpec((3,), tf.float32))
+        input_spec=tf.TensorSpec((3,), tf.float32))  # pytype: disable=wrong-arg-types
     inputs = np.ones((2, 3))
     out, state = sequential(inputs)
     self.assertEqual(state, ())
@@ -83,39 +88,36 @@ class SequentialTest(test_utils.TestCase):
     self.assertAllClose(expected, out)
 
   def testMixOfNonRecurrentAndRecurrent(self):
-
-    def reshape_inner_dims(tensor, ndims, new_inner_shape):
-      """Reshapes tensor to: shape(tensor)[:-ndims] + new_inner_shape."""
-      tensor_shape = tf.shape(tensor)
-      new_shape = tf.concat((tensor_shape[:-ndims], new_inner_shape), axis=0)
-      new_tensor = tf.reshape(tensor, new_shape)
-      new_tensor.set_shape(tensor.shape[:-ndims] + new_inner_shape)
-      return new_tensor
-
-    sequential = sequential_lib.Sequential([
-        tf.keras.layers.Dense(2),
-        tf.keras.layers.LSTM(2, return_state=True, return_sequences=True),
-        tf.keras.layers.RNN(
-            tf.keras.layers.StackedRNNCells([
-                tf.keras.layers.LSTMCell(1),
-                tf.keras.layers.LSTMCell(32),
-            ],),
-            return_state=True,
-            return_sequences=True,
-        ),
-        tf.keras.layers.Lambda(lambda t: reshape_inner_dims(t, 1, [4, 4, 2])),
-        tf.keras.layers.Conv2D(2, 3),
-        tf.keras.layers.Lambda(lambda t: reshape_inner_dims(t, 3, [8])),
-        tf.keras.layers.GRU(2, return_state=True, return_sequences=True),
-        dynamic_unroll_layer.DynamicUnroll(tf.keras.layers.LSTMCell(2)),
-    ],
-                                           input_spec=tf.TensorSpec((3,),
-                                                                    tf.float32))
+    sequential = sequential_lib.Sequential(
+        [
+            tf.keras.layers.Dense(2),
+            tf.keras.layers.LSTM(2, return_state=True, return_sequences=True),
+            tf.keras.layers.RNN(
+                tf.keras.layers.StackedRNNCells([
+                    tf.keras.layers.LSTMCell(1),
+                    tf.keras.layers.LSTMCell(32),
+                ],),
+                return_state=True,
+                return_sequences=True,
+            ),
+            # Convert inner dimension to [4, 4, 2] for convolution.
+            inner_reshape.InnerReshape([32], [4, 4, 2]),
+            tf.keras.layers.Conv2D(2, 3),
+            # Convert 3 inner dimensions to [?] for RNN.
+            inner_reshape.InnerReshape([None] * 3, [-1]),
+            tf.keras.layers.GRU(2, return_state=True, return_sequences=True),
+            dynamic_unroll_layer.DynamicUnroll(tf.keras.layers.LSTMCell(2)),
+            tf.keras.layers.Lambda(
+                lambda x: tfd.MultivariateNormalDiag(loc=x, scale_diag=x)),
+        ],
+        input_spec=tf.TensorSpec((3,), tf.float32))  # pytype: disable=wrong-arg-types
     self.assertEqual(
         sequential.input_tensor_spec, tf.TensorSpec((3,), tf.float32))
 
     output_spec = sequential.create_variables()
-    self.assertEqual(output_spec, tf.TensorSpec((2,), dtype=tf.float32))
+    self.assertIsInstance(output_spec, distribution_utils.DistributionSpecV2)
+    output_event_spec = output_spec.event_spec
+    self.assertEqual(output_event_spec, tf.TensorSpec((2,), dtype=tf.float32))
 
     tf.nest.map_structure(
         self.assertEqual,
@@ -143,7 +145,8 @@ class SequentialTest(test_utils.TestCase):
             ]))
 
     inputs = tf.ones((8, 10, 3), dtype=tf.float32)
-    outputs, _ = sequential(inputs)
+    dist, _ = sequential(inputs)
+    outputs = dist.sample()
     self.assertEqual(outputs.shape, tf.TensorShape([8, 10, 2]))
 
   def testPolicySaverCompatibility(self):
